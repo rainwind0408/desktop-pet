@@ -3,6 +3,7 @@
 整合 PyQt5 窗口、Flask API、角色管理、记忆系统、环境感知
 """
 
+import atexit
 import json
 import os
 import sys
@@ -31,6 +32,7 @@ def main():
     llm_config["provider"] = current_provider
 
     memory_system = MemorySystem(llm_config=llm_config)
+    atexit.register(memory_system.cleanup)  # 程序退出时清理资源
     environment_sensor = EnvironmentSensor()
     interaction_decider = InteractionDecider(environment_sensor=environment_sensor)
     media_sensor = MediaSensor(poll_interval=3.0)

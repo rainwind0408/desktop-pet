@@ -1,6 +1,14 @@
 """
 虚拟角色永久记忆系统
 实现 FAISS 向量检索、AES 加密、记忆缓存、异步写入等核心功能
+
+优化点：
+1. SQLite 连接池 - 减少频繁开关连接
+2. 摘要定时更新 - 批量处理，减少写入延迟
+3. FAISS IndexIVFFlat - 提升大数据量检索性能
+4. 动态缓存策略 - 基于访问频率调整
+5. LLM 辅助重要性评估
+6. 解密结果缓存
 """
 
 import hashlib
@@ -8,14 +16,85 @@ import json
 import os
 import re
 import sqlite3
-import struct
 import threading
 import time
+from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import faiss
 import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# SQLite 连接池
+# ---------------------------------------------------------------------------
+
+class SQLiteConnectionPool:
+    """SQLite 连接池，每个角色一个长连接"""
+
+    def __init__(self, max_idle_time: float = 300):
+        self._connections: Dict[str, sqlite3.Connection] = {}
+        self._last_used: Dict[str, float] = {}
+        self._lock = threading.Lock()
+        self._max_idle_time = max_idle_time
+
+    def get_connection(self, db_path: str) -> sqlite3.Connection:
+        """获取数据库连接，如果不存在或已过期则创建新连接"""
+        with self._lock:
+            now = time.time()
+            conn = self._connections.get(db_path)
+
+            # 检查连接是否存在且未过期
+            if conn is not None:
+                last_used = self._last_used.get(db_path, 0)
+                if now - last_used < self._max_idle_time:
+                    self._last_used[db_path] = now
+                    return conn
+                else:
+                    # 连接过期，关闭并创建新的
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+            # 创建新连接
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")  # 启用 WAL 模式提升并发性能
+            self._connections[db_path] = conn
+            self._last_used[db_path] = now
+            return conn
+
+    def close_all(self):
+        """关闭所有连接"""
+        with self._lock:
+            for conn in self._connections.values():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._connections.clear()
+            self._last_used.clear()
+
+    def cleanup_idle(self):
+        """清理空闲连接"""
+        with self._lock:
+            now = time.time()
+            expired = [
+                path for path, last_used in self._last_used.items()
+                if now - last_used >= self._max_idle_time
+            ]
+            for path in expired:
+                conn = self._connections.pop(path, None)
+                self._last_used.pop(path, None)
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
 
 # ---------------------------------------------------------------------------
 # Embedding 提供者
@@ -115,11 +194,11 @@ class EmbeddingProvider:
 
 
 # ---------------------------------------------------------------------------
-# AES 加密工具
+# AES 加密工具（带解密缓存）
 # ---------------------------------------------------------------------------
 
 class MemoryEncryptor:
-    """使用 Fernet (AES-128-CBC) 加密敏感记忆"""
+    """使用 Fernet (AES-128-CBC) 加密敏感记忆，支持解密缓存"""
 
     SENSITIVE_PATTERNS = [
         r"密码|password|passwd|口令",
@@ -133,6 +212,8 @@ class MemoryEncryptor:
     def __init__(self, key_dir: str = "characters"):
         self._fernet = None
         self._key_dir = key_dir
+        self._decrypt_cache: Dict[str, str] = {}  # 加密内容 -> 解密内容
+        self._cache_lock = threading.Lock()
         self._init_key()
 
     def _init_key(self):
@@ -173,12 +254,36 @@ class MemoryEncryptor:
             return content
 
     def decrypt(self, content: str) -> str:
+        """解密内容，使用缓存避免重复解密"""
         if not self._fernet:
             return content
+
+        # 检查缓存
+        with self._cache_lock:
+            if content in self._decrypt_cache:
+                return self._decrypt_cache[content]
+
+        # 解密
         try:
-            return self._fernet.decrypt(content.encode("ascii")).decode("utf-8")
+            decrypted = self._fernet.decrypt(content.encode("ascii")).decode("utf-8")
         except Exception:
             return content
+
+        # 缓存结果（限制缓存大小）
+        with self._cache_lock:
+            if len(self._decrypt_cache) > 1000:
+                # 清理一半缓存
+                keys = list(self._decrypt_cache.keys())
+                for k in keys[:500]:
+                    del self._decrypt_cache[k]
+            self._decrypt_cache[content] = decrypted
+
+        return decrypted
+
+    def clear_cache(self):
+        """清空解密缓存"""
+        with self._cache_lock:
+            self._decrypt_cache.clear()
 
     @property
     def available(self) -> bool:
@@ -193,18 +298,32 @@ class MemorySystem:
     def __init__(self, characters_dir: str = "characters", llm_config: Optional[Dict] = None):
         self.characters_dir = characters_dir
         self.importance_threshold = 0.5
-        self._memory_cache: Dict[str, List[Dict]] = {}
-        self._cache_ttl = 300  # 5 分钟
-        self._cache_timestamps: Dict[str, float] = {}
+        self._llm_config = llm_config
 
+        # 连接池
+        self._conn_pool = SQLiteConnectionPool(max_idle_time=300)
+
+        # 缓存管理（动态 TTL）
+        self._memory_cache: Dict[str, List[Dict]] = {}
+        self._cache_access_count: Dict[str, int] = defaultdict(int)
+        self._cache_timestamps: Dict[str, float] = {}
+        self._base_cache_ttl = 300  # 5 分钟基础 TTL
+        self._max_cache_ttl = 1800  # 30 分钟最大 TTL
+
+        # Embedding 和加密
         self.embedding_provider = EmbeddingProvider(llm_config)
         self.encryptor = MemoryEncryptor(characters_dir)
 
-        # FAISS 索引内存缓存 character_id -> faiss.Index
+        # FAISS 索引管理
         self._faiss_indices: Dict[str, faiss.Index] = {}
-        # FAISS id 到 SQLite rowid 的映射
         self._faiss_id_map: Dict[str, List[int]] = {}
         self._faiss_lock = threading.Lock()
+        self._faiss_trained: Dict[str, bool] = {}  # 标记索引是否已训练
+
+        # 摘要更新管理
+        self._summary_dirty: Dict[str, bool] = {}  # 标记哪些角色需要更新摘要
+        self._summary_timer: Optional[threading.Timer] = None
+        self._summary_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 路径工具
@@ -228,9 +347,7 @@ class MemorySystem:
 
     def _ensure_db(self, character_id: str):
         db_path = self._get_db_path(character_id)
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-        conn = sqlite3.connect(db_path)
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS memories (
@@ -254,10 +371,9 @@ class MemorySystem:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_archived ON memories(archived)")
         conn.commit()
-        conn.close()
 
     # ------------------------------------------------------------------
-    # FAISS 索引管理
+    # FAISS 索引管理（支持 IVFFlat）
     # ------------------------------------------------------------------
 
     def _load_faiss_index(self, character_id: str) -> Tuple[faiss.Index, List[int]]:
@@ -275,14 +391,41 @@ class MemorySystem:
                     id_map = self._rebuild_id_map(character_id)
                     self._faiss_indices[character_id] = index
                     self._faiss_id_map[character_id] = id_map
+                    self._faiss_trained[character_id] = True
                     return index, id_map
                 except Exception:
                     pass
 
-            index = faiss.IndexFlatIP(dim)  # 内积相似度（向量已归一化）
+            # 创建新索引：先用 FlatIP，数据量大时自动切换到 IVFFlat
+            index = faiss.IndexFlatIP(dim)
             self._faiss_indices[character_id] = index
             self._faiss_id_map[character_id] = []
+            self._faiss_trained[character_id] = True  # FlatIP 不需要训练
             return index, []
+
+    def _maybe_upgrade_to_ivf(self, character_id: str):
+        """当数据量足够时，自动升级到 IVFFlat 索引"""
+        with self._faiss_lock:
+            index = self._faiss_indices.get(character_id)
+            if index is None:
+                return
+
+            # 数据量超过 1000 且当前是 FlatIP 时升级
+            if index.ntotal > 1000 and isinstance(index, faiss.IndexFlatIP):
+                dim = self.embedding_provider.EMBEDDING_DIM
+                nlist = min(100, index.ntotal // 10)  # 聚类数
+                quantizer = faiss.IndexFlatIP(dim)
+                new_index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+
+                # 获取所有向量进行训练
+                vectors = faiss.rev_swig_ptr(index.get_xb(), index.ntotal * dim)
+                vectors = vectors.reshape(index.ntotal, dim).copy()
+                new_index.train(vectors)
+                new_index.add(vectors)
+
+                self._faiss_indices[character_id] = new_index
+                self._faiss_trained[character_id] = True
+                self._save_faiss_index(character_id)
 
     def _save_faiss_index(self, character_id: str):
         with self._faiss_lock:
@@ -298,13 +441,12 @@ class MemorySystem:
         db_path = self._get_db_path(character_id)
         if not os.path.exists(db_path):
             return []
-        conn = sqlite3.connect(db_path)
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id FROM memories WHERE archived = 0 ORDER BY id"
         )
         ids = [row[0] for row in cursor.fetchall()]
-        conn.close()
         return ids
 
     def _rebuild_faiss_index(self, character_id: str):
@@ -313,14 +455,12 @@ class MemorySystem:
         if not os.path.exists(db_path):
             return
 
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, content, encrypted FROM memories WHERE archived = 0 ORDER BY id"
         )
         rows = cursor.fetchall()
-        conn.close()
 
         dim = self.embedding_provider.EMBEDDING_DIM
         index = faiss.IndexFlatIP(dim)
@@ -343,19 +483,18 @@ class MemorySystem:
         with self._faiss_lock:
             self._faiss_indices[character_id] = index
             self._faiss_id_map[character_id] = id_map
+            self._faiss_trained[character_id] = True
 
         self._save_faiss_index(character_id)
-
-        try:
-            self._sync_readable_summary(character_id)
-        except Exception:
-            pass
+        self._mark_summary_dirty(character_id)
 
     # ------------------------------------------------------------------
-    # 重要性评估
+    # 重要性评估（支持 LLM 辅助）
     # ------------------------------------------------------------------
 
-    def evaluate_importance(self, content: str) -> float:
+    def evaluate_importance(self, content: str, use_llm: bool = False) -> float:
+        """评估记忆重要性，可选使用 LLM 辅助"""
+        # 基于规则的快速评估
         importance_rules = [
             (r"生日|纪念日|重要|特别|结婚|毕业|入职", 0.9),
             (r"birthday|anniversary|important|special|wedding|graduation", 0.9),
@@ -376,15 +515,60 @@ class MemorySystem:
         for pattern, weight in importance_rules:
             if re.search(pattern, content, re.IGNORECASE):
                 score = max(score, weight)
+
+        # 如果需要 LLM 辅助评估（仅对中等重要性的内容）
+        if use_llm and 0.4 <= score <= 0.7 and self._llm_config:
+            try:
+                llm_score = self._evaluate_importance_with_llm(content)
+                if llm_score is not None:
+                    # 取规则和 LLM 评估的加权平均
+                    score = score * 0.4 + llm_score * 0.6
+            except Exception:
+                pass
+
         return score
 
+    def _evaluate_importance_with_llm(self, content: str) -> Optional[float]:
+        """使用 LLM 评估内容重要性"""
+        try:
+            from llm import LLMFactory
+            provider = LLMFactory.create(self._llm_config)
+            prompt = f"""请评估以下对话内容的重要性（0.0-1.0）：
+- 0.9-1.0: 重要个人信息（生日、纪念日、偏好、家人等）
+- 0.7-0.8: 有价值的信息（工作、学校、兴趣等）
+- 0.5-0.6: 一般信息（天气、日常等）
+- 0.1-0.4: 寒暄、问候、无意义内容
+
+内容：{content[:200]}
+
+只返回一个数字，不要其他内容。"""
+
+            response = provider.chat([{"role": "user", "content": prompt}])
+            # 提取数字
+            match = re.search(r"(\d+\.?\d*)", response)
+            if match:
+                score = float(match.group(1))
+                return max(0.1, min(1.0, score))
+        except Exception:
+            pass
+        return None
+
     # ------------------------------------------------------------------
-    # 缓存管理
+    # 缓存管理（动态 TTL）
     # ------------------------------------------------------------------
+
+    def _get_cache_ttl(self, character_id: str) -> float:
+        """根据访问频率动态调整缓存 TTL"""
+        access_count = self._cache_access_count.get(character_id, 0)
+        # 访问越多，缓存时间越长
+        ttl = self._base_cache_ttl * (1 + access_count * 0.1)
+        return min(ttl, self._max_cache_ttl)
 
     def _get_cache(self, character_id: str) -> Optional[List[Dict]]:
         ts = self._cache_timestamps.get(character_id, 0)
-        if time.time() - ts < self._cache_ttl:
+        ttl = self._get_cache_ttl(character_id)
+        if time.time() - ts < ttl:
+            self._cache_access_count[character_id] += 1
             return self._memory_cache.get(character_id)
         return None
 
@@ -395,6 +579,33 @@ class MemorySystem:
     def _invalidate_cache(self, character_id: str):
         self._memory_cache.pop(character_id, None)
         self._cache_timestamps.pop(character_id, None)
+        self._cache_access_count.pop(character_id, None)
+
+    # ------------------------------------------------------------------
+    # 摘要管理（延迟更新）
+    # ------------------------------------------------------------------
+
+    def _mark_summary_dirty(self, character_id: str):
+        """标记角色摘要需要更新"""
+        with self._summary_lock:
+            self._summary_dirty[character_id] = True
+            # 启动定时器，延迟更新摘要
+            if self._summary_timer is None or not self._summary_timer.is_alive():
+                self._summary_timer = threading.Timer(10.0, self._flush_dirty_summaries)
+                self._summary_timer.daemon = True
+                self._summary_timer.start()
+
+    def _flush_dirty_summaries(self):
+        """批量更新所有标记为 dirty 的摘要"""
+        with self._summary_lock:
+            dirty_ids = [cid for cid, dirty in self._summary_dirty.items() if dirty]
+            self._summary_dirty.clear()
+
+        for character_id in dirty_ids:
+            try:
+                self._sync_readable_summary(character_id)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # 记忆写入
@@ -412,7 +623,7 @@ class MemorySystem:
         is_enc = self.encryptor.is_sensitive(content)
         stored_content = self.encryptor.encrypt(content) if is_enc else content
 
-        conn = sqlite3.connect(db_path)
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO memories (content, encrypted, role, importance, timestamp) VALUES (?, ?, ?, ?, ?)",
@@ -420,7 +631,6 @@ class MemorySystem:
         )
         row_id = cursor.lastrowid
         conn.commit()
-        conn.close()
 
         # 更新 FAISS 索引
         try:
@@ -430,16 +640,15 @@ class MemorySystem:
                 index.add(vector.reshape(1, -1))
                 id_map.append(row_id)
             self._save_faiss_index(character_id)
+            # 检查是否需要升级索引
+            self._maybe_upgrade_to_ivf(character_id)
         except Exception:
             pass
 
         self._invalidate_cache(character_id)
 
-        # 实时同步人类可读摘要
-        try:
-            self._sync_readable_summary(character_id)
-        except Exception:
-            pass
+        # 延迟更新摘要（而非立即更新）
+        self._mark_summary_dirty(character_id)
 
         return True
 
@@ -472,8 +681,7 @@ class MemorySystem:
         vector_results = self._vector_search(character_id, query, top_k * 3) if query else []
 
         # 数据库检索（作为补充）
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
 
         if vector_results:
@@ -539,7 +747,6 @@ class MemorySystem:
             )
 
         conn.commit()
-        conn.close()
 
         memories.sort(key=lambda x: x["score"], reverse=True)
         result = memories[:top_k]
@@ -557,6 +764,11 @@ class MemorySystem:
 
             query_vec = self.embedding_provider.embed_single(query).reshape(1, -1)
             k = min(top_k, index.ntotal)
+
+            # 如果是 IVFFlat，设置 nprobe
+            if isinstance(index, faiss.IndexIVFFlat):
+                index.nprobe = min(10, index.nlist)
+
             distances, indices = index.search(query_vec, k)
 
             results = []
@@ -594,12 +806,11 @@ class MemorySystem:
     # ------------------------------------------------------------------
 
     def _sync_readable_summary(self, character_id: str):
-        """实时同步生成人类可读的记忆摘要文件"""
+        """生成人类可读的记忆摘要文件"""
         self._ensure_db(character_id)
         db_path = self._get_db_path(character_id)
 
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
 
         cursor.execute(
@@ -610,8 +821,6 @@ class MemorySystem:
 
         cursor.execute("SELECT COUNT(*) FROM memories WHERE archived = 1")
         archived_count = cursor.fetchone()[0]
-
-        conn.close()
 
         now = datetime.now()
         lines = []
@@ -689,7 +898,7 @@ class MemorySystem:
                     lines.append("")
 
         lines.append("-" * 60)
-        lines.append("  说明: 此文件由记忆系统自动生成，每次新记忆写入后实时更新。")
+        lines.append("  说明: 此文件由记忆系统自动生成，每次新记忆写入后延迟更新。")
         lines.append("  加密记忆已脱敏显示，完整内容存储在 memory_metadata.db 中。")
         lines.append("=" * 60)
 
@@ -770,7 +979,7 @@ class MemorySystem:
         db_path = self._get_db_path(character_id)
         cutoff_time = time.time() - max_age_days * 86400
 
-        conn = sqlite3.connect(db_path)
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE memories SET archived = 1 WHERE timestamp < ? AND importance < ? AND archived = 0",
@@ -778,15 +987,10 @@ class MemorySystem:
         )
         count = cursor.rowcount
         conn.commit()
-        conn.close()
 
         if count > 0:
             self._invalidate_cache(character_id)
             self._rebuild_faiss_index(character_id)
-            try:
-                self._sync_readable_summary(character_id)
-            except Exception:
-                pass
 
         return count
 
@@ -804,6 +1008,7 @@ class MemorySystem:
         with self._faiss_lock:
             self._faiss_indices.pop(character_id, None)
             self._faiss_id_map.pop(character_id, None)
+            self._faiss_trained.pop(character_id, None)
         return True
 
     # ------------------------------------------------------------------
@@ -814,7 +1019,7 @@ class MemorySystem:
         self._ensure_db(character_id)
         db_path = self._get_db_path(character_id)
 
-        conn = sqlite3.connect(db_path)
+        conn = self._conn_pool.get_connection(db_path)
         cursor = conn.cursor()
 
         cursor.execute("SELECT COUNT(*) FROM memories WHERE archived = 0")
@@ -835,8 +1040,6 @@ class MemorySystem:
         cursor.execute("SELECT COUNT(*) FROM memories WHERE encrypted = 1 AND archived = 0")
         encrypted = cursor.fetchone()[0]
 
-        conn.close()
-
         with self._faiss_lock:
             faiss_total = self._faiss_indices.get(character_id, faiss.IndexFlatIP(1)).ntotal if character_id in self._faiss_indices else 0
 
@@ -848,4 +1051,18 @@ class MemorySystem:
             "encrypted": encrypted,
             "faiss_vectors": faiss_total,
             "cache_hit": character_id in self._memory_cache,
+            "cache_ttl": self._get_cache_ttl(character_id),
         }
+
+    # ------------------------------------------------------------------
+    # 清理资源
+    # ------------------------------------------------------------------
+
+    def cleanup(self):
+        """清理资源，在程序退出时调用"""
+        # 刷新所有待更新的摘要
+        self._flush_dirty_summaries()
+        # 清理空闲连接
+        self._conn_pool.cleanup_idle()
+        # 清空解密缓存
+        self.encryptor.clear_cache()
