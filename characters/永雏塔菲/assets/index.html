@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Model Viewer</title>
+
+<!-- Live2D SDK -->
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/index.min.js"></script>
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+
+<!-- Three.js + VRM SDK -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.0.6/lib/three-vrm.min.js"></script>
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+#model-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+}
+#fallback-view {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    font-family: "Microsoft YaHei", sans-serif;
+    color: #555;
+}
+#fallback-avatar {
+    width: 160px; height: 160px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #fce4ec 0%, #e8eaf6 50%, #e0f2f1 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 80px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+    animation: float 3s ease-in-out infinite, pulse 2s ease-in-out infinite;
+    cursor: pointer;
+    user-select: none;
+}
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-12px); }
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+#fallback-name {
+    margin-top: 16px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #444;
+    animation: fadeInOut 4s ease-in-out infinite;
+}
+@keyframes fadeInOut {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+#status-bar {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: rgba(0,0,0,0.3);
+    pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="model-canvas"></canvas>
+
+<div id="fallback-view">
+    <div id="fallback-avatar" title="点击互动">🎀</div>
+    <div id="fallback-name"></div>
+</div>
+
+<div id="status-bar">Ready</div>
+
+<script>
+// ========== 全局变量 ==========
+var _bridge = null;
+var _characterConfig = {
+    name: '桌面宠物',
+    avatar: '🎀',
+    modelPath: 'model/model.model3.json',
+    styleType: 'live2d',  // 'live2d' | 'vrm'
+    scale: 1.0
+};
+var _modelScale = 1.0;
+var _idleInterval = null;
+var _idleMs = 5000;
+var _currentMotion = null;
+var _emojis = ['🎀', '🌸', '✨', '💖', '🌟', '🐱', '🎵', '🍀', '💫', '🦋'];
+
+// Three.js 相关
+var _threeScene = null;
+var _threeCamera = null;
+var _threeRenderer = null;
+var _threeModel = null;
+var _threeClock = null;
+var _threeAnimationId = null;
+
+// Live2D 相关
+var _pixiApp = null;
+var _live2dModel = null;
+
+// ========== 桥接初始化 ==========
+function initBridge() {
+    try {
+        if (typeof QWebChannel !== 'undefined') {
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                _bridge = channel.objects.live2dBridge;
+                if (_bridge) {
+                    _bridge.on_model_loaded('fallback');
+                }
+            });
+        }
+    } catch (e) {
+        console.log('QWebChannel not available, running standalone');
+    }
+}
+
+function loadConfig(callback) {
+    callback(_characterConfig);
+}
+
+// ========== Fallback 模式 ==========
+function initFallback() {
+    var canvas = document.getElementById('model-canvas');
+    if (canvas) canvas.style.display = 'none';
+
+    document.getElementById('fallback-view').style.display = 'flex';
+    document.getElementById('fallback-name').textContent = _characterConfig.name;
+    document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+
+    document.getElementById('fallback-avatar').addEventListener('click', function() {
+        playRandomMotion();
+        var emojis = _emojis;
+        this.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+        setTimeout(function() {
+            document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+        }, 800);
+    });
+}
+
+// ========== Live2D 渲染 ==========
+function startLive2D() {
+    var canvas = document.getElementById('model-canvas');
+
+    try {
+        if (typeof PIXI === 'undefined' || typeof Live2DModel === 'undefined') {
+            console.log('Live2D SDK not available');
+            return false;
+        }
+
+        document.getElementById('status-bar').textContent = 'Loading Live2D...';
+
+        _pixiApp = new PIXI.Application({
+            view: canvas,
+            width: canvas.clientWidth,
+            height: canvas.clientHeight,
+            transparent: true,
+            autoStart: true,
+            resizeTo: canvas
+        });
+
+        Live2DModel.from(_characterConfig.modelPath).then(function(model) {
+            _live2dModel = model;
+            _pixiApp.stage.addChild(model);
+            model.scale.set(_modelScale);
+            model.x = _pixiApp.view.width / 2;
+            model.y = _pixiApp.view.height / 2;
+            model.anchor.set(0.5, 0.5);
+
+            model.on('hit', function(hitAreas) {
+                playMotion('tap_body');
+            });
+
+            document.getElementById('fallback-view').style.display = 'none';
+            document.getElementById('status-bar').textContent = 'Live2D Loaded';
+            canvas.style.display = 'block';
+
+            if (_bridge) {
+                _bridge.on_model_loaded(_characterConfig.name);
+            }
+        }).catch(function(err) {
+            console.error('Live2D load error:', err);
+            document.getElementById('status-bar').textContent = 'Live2D failed: ' + err.message;
+            return false;
+        });
+
+        return true;
+    } catch (e) {
+        console.error('Live2D init error:', e);
+        document.getElementById('status-bar').textContent = 'Live2D SDK error';
+        return false;
+    }
+}
+
+// ========== VRM 渲染 ==========
+function startVRM() {
+    var canvas = document.getElementById('model-canvas');
+
+    try {
+        if (typeof THREE === 'undefined') {
+            console.log('Three.js not available');
+            return false;
+        }
+
+        document.getElementById('status-bar').textContent = 'Loading VRM...';
+
+        var width = canvas.clientWidth;
+        var height = canvas.clientHeight;
+
+        // 场景
+        _threeScene = new THREE.Scene();
+        _threeClock = new THREE.Clock();
+
+        // 相机
+        _threeCamera = new THREE.PerspectiveCamera(30, width / height, 0.1, 1000);
+        _threeCamera.position.set(0, 1.3, 2.5);
+
+        // 渲染器
+        _threeRenderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            alpha: true,
+            antialias: true
+        });
+        _threeRenderer.setSize(width, height);
+        _threeRenderer.setPixelRatio(window.devicePixelRatio);
+        _threeRenderer.outputColorSpace = THREE.SRGBColorSpace;
+
+        // 灯光
+        var ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        _threeScene.add(ambientLight);
+
+        var directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(1, 1, 1).normalize();
+        _threeScene.add(directionalLight);
+
+        // 控制器
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            var controls = new THREE.OrbitControls(_threeCamera, canvas);
+            controls.target.set(0, 1.3, 0);
+            controls.update();
+        }
+
+        // 加载 VRM 模型
+        var loader = new THREE.GLTFLoader();
+
+        // 注册 VRM 插件
+        if (typeof THREEVRM !== 'undefined' && THREEVRM.VRMLoaderPlugin) {
+            loader.register(function(parser) {
+                return new THREEVRM.VRMLoaderPlugin(parser);
+            });
+        }
+
+        loader.load(
+            _characterConfig.modelPath,
+            function(gltf) {
+                var vrm = gltf.userData.vrm;
+
+                if (vrm) {
+                    // VRM 模型
+                    _threeModel = vrm;
+                    _threeScene.add(vrm.scene);
+
+                    // 调整模型朝向
+                    vrm.scene.rotation.y = Math.PI;
+
+                    document.getElementById('status-bar').textContent = 'VRM Loaded';
+                    console.log('VRM model loaded:', _characterConfig.name);
+                } else {
+                    // 普通 GLTF 模型
+                    _threeModel = { scene: gltf.scene, update: function() {} };
+                    _threeScene.add(gltf.scene);
+
+                    document.getElementById('status-bar').textContent = 'GLTF Loaded';
+                    console.log('GLTF model loaded');
+                }
+
+                // 隐藏 fallback，显示 canvas
+                document.getElementById('fallback-view').style.display = 'none';
+                canvas.style.display = 'block';
+
+                if (_bridge) {
+                    _bridge.on_model_loaded(_characterConfig.name);
+                }
+
+                // 开始动画循环
+                animate();
+            },
+            function(progress) {
+                var percent = Math.round((progress.loaded / progress.total) * 100);
+                document.getElementById('status-bar').textContent = 'Loading: ' + percent + '%';
+            },
+            function(error) {
+                console.error('VRM load error:', error);
+                document.getElementById('status-bar').textContent = 'VRM load failed: ' + error.message;
+                initFallback();
+            }
+        );
+
+        return true;
+    } catch (e) {
+        console.error('VRM init error:', e);
+        document.getElementById('status-bar').textContent = 'VRM init error';
+        return false;
+    }
+}
+
+function animate() {
+    _threeAnimationId = requestAnimationFrame(animate);
+
+    var deltaTime = _threeClock.getDelta();
+
+    // 更新 VRM 模型
+    if (_threeModel && _threeModel.update) {
+        _threeModel.update(deltaTime);
+    }
+
+    // 渲染场景
+    if (_threeRenderer && _threeScene && _threeCamera) {
+        _threeRenderer.render(_threeScene, _threeCamera);
+    }
+}
+
+// ========== 公共接口 ==========
+function playMotion(name, group) {
+    _currentMotion = name;
+    console.log('Motion:', name, group);
+    fallbackReaction(name);
+
+    // VRM 表情支持
+    if (_threeModel && _threeModel.expressionManager) {
+        var expressionMap = {
+            'happy': 'happy',
+            'joy': 'happy',
+            'surprised': 'surprised',
+            'sad': 'sad',
+            'upset': 'angry'
+        };
+        var expression = expressionMap[name];
+        if (expression) {
+            _threeModel.expressionManager.setValue(expression, 1.0);
+            setTimeout(function() {
+                _threeModel.expressionManager.setValue(expression, 0);
+            }, 1500);
+        }
+    }
+
+    // Live2D 动作支持
+    if (_live2dModel) {
+        // Live2D 动作由 pixi-live2d-display 自动处理
+    }
+
+    if (_bridge) {
+        _bridge.on_motion_started(group || 'default', name);
+        setTimeout(function() {
+            _bridge.on_motion_finished(group || 'default', name);
+        }, 2000);
+    }
+}
+
+function setExpression(name) {
+    console.log('Expression:', name);
+
+    // VRM 表情
+    if (_threeModel && _threeModel.expressionManager) {
+        _threeModel.expressionManager.setValue(name, 1.0);
+        setTimeout(function() {
+            _threeModel.expressionManager.setValue(name, 0);
+        }, 1500);
+    }
+
+    // Fallback 表情
+    var avatar = document.getElementById('fallback-avatar');
+    if (avatar) {
+        if (name === 'happy') {
+            avatar.textContent = '😊';
+        } else if (name === 'surprised') {
+            avatar.textContent = '😮';
+        } else if (name === 'sad') {
+            avatar.textContent = '😢';
+        }
+        setTimeout(function() {
+            avatar.textContent = _characterConfig.avatar;
+        }, 1500);
+    }
+}
+
+function fallbackReaction(motion) {
+    var avatar = document.getElementById('fallback-avatar');
+    if (!avatar) return;
+
+    if (motion === 'happy' || motion === 'joy') {
+        avatar.textContent = '😊';
+    } else if (motion === 'surprised') {
+        avatar.textContent = '😮';
+    } else if (motion === 'sad' || motion === 'upset') {
+        avatar.textContent = '😢';
+    } else {
+        var emojis = _emojis;
+        avatar.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    }
+    setTimeout(function() {
+        avatar.textContent = _characterConfig.avatar;
+    }, 1500);
+}
+
+function playRandomMotion() {
+    var names = ['idle', 'happy', 'surprised', 'greeting', 'thinking'];
+    var name = names[Math.floor(Math.random() * names.length)];
+    playMotion(name);
+}
+
+function setMouseFollow(x, y) {
+    // VRM 头部跟踪（可选实现）
+    if (_threeModel && _threeModel.lookAt) {
+        // 简单的鼠标跟踪
+        var targetX = (x / window.innerWidth - 0.5) * 2;
+        var targetY = (y / window.innerHeight - 0.5) * 2;
+        _threeModel.lookAt.target.position.set(targetX * 0.5, targetY * 0.5 + 1.3, 2);
+    }
+}
+
+function setModelScale(scale) {
+    _modelScale = scale;
+
+    // VRM 缩放
+    if (_threeModel && _threeModel.scene) {
+        _threeModel.scene.scale.set(scale, scale, scale);
+    }
+
+    // Live2D 缩放
+    if (_live2dModel) {
+        _live2dModel.scale.set(scale);
+    }
+
+    // Fallback 缩放
+    var avatar = document.getElementById('fallback-avatar');
+    if (avatar) {
+        avatar.style.transform = 'scale(' + scale + ')';
+    }
+}
+
+function startIdleTimer(intervalMs) {
+    stopIdleTimer();
+    _idleMs = intervalMs || 5000;
+    _idleInterval = setInterval(playRandomMotion, _idleMs);
+}
+
+function stopIdleTimer() {
+    if (_idleInterval) {
+        clearInterval(_idleInterval);
+        _idleInterval = null;
+    }
+}
+
+// ========== 窗口大小调整 ==========
+window.addEventListener('resize', function() {
+    var canvas = document.getElementById('model-canvas');
+    if (!canvas) return;
+
+    var width = canvas.clientWidth;
+    var height = canvas.clientHeight;
+
+    // Three.js 响应式
+    if (_threeCamera && _threeRenderer) {
+        _threeCamera.aspect = width / height;
+        _threeCamera.updateProjectionMatrix();
+        _threeRenderer.setSize(width, height);
+    }
+
+    // Live2D 响应式
+    if (_pixiApp) {
+        _pixiApp.renderer.resize(width, height);
+    }
+});
+
+// ========== 主入口 ==========
+function main() {
+    loadConfig(function(config) {
+        _characterConfig = config;
+        document.title = _characterConfig.name;
+        initBridge();
+
+        var started = false;
+
+        // 根据配置自动选择渲染方式
+        if (_characterConfig.styleType === 'vrm') {
+            console.log('Starting VRM mode...');
+            started = startVRM();
+        } else {
+            console.log('Starting Live2D mode...');
+            started = startLive2D();
+        }
+
+        // 如果加载失败，显示 fallback
+        if (!started) {
+            console.log('Model loading failed, using fallback');
+            initFallback();
+        }
+    });
+}
+
+window.onload = function() {
+    main();
+};
+</script>
+</body>
+</html>

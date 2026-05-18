@@ -1,0 +1,24 @@
+{
+  "updated_at": null,
+  "stats": {
+    "total_plays": 0,
+    "total_hours": 0,
+    "unique_songs": 0,
+    "unique_artists": 0
+  },
+  "top_songs_7d": [],
+  "top_songs_30d": [],
+  "top_artists_30d": [],
+  "listening_pattern": {
+    "morning": 0,
+    "afternoon": 0,
+    "evening": 0,
+    "night": 0
+  },
+  "favorite_platform": "",
+  "weekly_trend": {
+    "plays_this_week": 0,
+    "plays_last_week": 0,
+    "trend": "new"
+  }
+}
