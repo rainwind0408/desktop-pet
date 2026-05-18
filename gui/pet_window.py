@@ -16,6 +16,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QObject
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 
+from .model_widget import ModelWidget
+
 
 API_BASE = "http://127.0.0.1:5000/api"
 
@@ -516,31 +518,23 @@ class PetWindow(QMainWindow):
         )
 
     def init_pet_display(self):
-        central = QLabel(self)
-        central.setAlignment(Qt.AlignCenter)
-        central.setStyleSheet("""
-            QLabel {
-                background-color: rgba(255, 255, 255, 0.3);
-                border-radius: 20px;
-                border: 2px dashed rgba(150, 150, 150, 0.5);
-            }
-        """)
-        central.setGeometry(40, 40, 320, 380)
-        central.setText("🎀\n桌面宠物\n等待模型加载...")
-        central.setObjectName("petDisplay")
-        central.setContextMenuPolicy(Qt.CustomContextMenu)
-        central.customContextMenuRequested.connect(lambda pos: self.show_context_menu(central.mapToGlobal(pos)))
-        font = central.font()
-        font.setPointSize(16)
-        central.setFont(font)
-        self.pet_display = central
+        self.pet_display = ModelWidget(self)
+        self.pet_display.setGeometry(40, 40, 320, 380)
+        self.pet_display.setObjectName("petDisplay")
+        self.pet_display.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.pet_display.customContextMenuRequested.connect(
+            lambda pos: self.show_context_menu(self.pet_display.mapToGlobal(pos))
+        )
+        self.pet_display.model_ready.connect(self._on_model_ready)
 
         status = QLabel("右键点击打开菜单 | 左键拖拽移动", self)
         status.setAlignment(Qt.AlignCenter)
         status.setStyleSheet("color: rgba(255,255,255,0.8); font-size: 11px;")
         status.setGeometry(40, 430, 320, 25)
         status.setContextMenuPolicy(Qt.CustomContextMenu)
-        status.customContextMenuRequested.connect(lambda pos: self.show_context_menu(status.mapToGlobal(pos)))
+        status.customContextMenuRequested.connect(
+            lambda pos: self.show_context_menu(status.mapToGlobal(pos))
+        )
 
     def init_tray(self):
         self.tray_icon = QSystemTrayIcon(self)
@@ -655,6 +649,12 @@ class PetWindow(QMainWindow):
         new_w = int(base_w * factor)
         new_h = int(base_h * factor)
         self.setFixedSize(new_w, new_h)
+        if hasattr(self, 'pet_display'):
+            self.pet_display.set_scale(factor)
+            self.pet_display.setGeometry(
+                int(40 * factor), int(40 * factor),
+                int(320 * factor), int(380 * factor)
+            )
 
     def on_opacity_changed(self, value):
         self.setWindowOpacity(value / 100.0)
@@ -666,6 +666,9 @@ class PetWindow(QMainWindow):
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint)
         self.show()
 
+    def _on_model_ready(self, model_name):
+        self.setWindowTitle(f"桌面宠物 - {model_name}")
+
     def set_character_manager(self, character_manager):
         self.character_manager = character_manager
         self.update_pet_display()
@@ -676,7 +679,7 @@ class PetWindow(QMainWindow):
             if char_id:
                 try:
                     profile = self.character_manager.load_character_profile(char_id)
-                    self.pet_display.setText(f"🎀\n{profile['name']}\n等待模型加载...")
+                    self.pet_display.load_character(char_id, profile)
                 except Exception:
                     pass
 

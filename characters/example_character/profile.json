@@ -3,8 +3,8 @@
   "name": "示例角色",
   "description": "示例角色描述",
   "appearance": {
-    "modelPath": "/assets/model/model.model3.json",
-    "styleType": "live2d"
+    "modelPath": "assets/model/character.vrm",
+    "styleType": "vrm"
   },
   "personality": {
     "prompt": "你是一个温柔体贴的虚拟宠物...",
