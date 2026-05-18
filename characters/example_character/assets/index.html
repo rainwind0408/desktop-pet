@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live2D</title>
+<!-- PIXI.js v6 -->
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+<!-- pixi-live2d-display -->
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/index.min.js"></script>
+<!-- Live2D Cubism Core -->
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+#live2d-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+}
+#fallback-view {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    font-family: "Microsoft YaHei", sans-serif;
+    color: #555;
+}
+#fallback-avatar {
+    width: 160px; height: 160px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #fce4ec 0%, #e8eaf6 50%, #e0f2f1 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 80px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+    animation: float 3s ease-in-out infinite, pulse 2s ease-in-out infinite;
+    cursor: pointer;
+    user-select: none;
+}
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-12px); }
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+#fallback-name {
+    margin-top: 16px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #444;
+    animation: fadeInOut 4s ease-in-out infinite;
+}
+@keyframes fadeInOut {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+#status-bar {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: rgba(0,0,0,0.3);
+    pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="live2d-canvas"></canvas>
+
+<div id="fallback-view">
+    <div id="fallback-avatar" title="点击互动">🎀</div>
+    <div id="fallback-name"></div>
+</div>
+
+<div id="status-bar">Live2D Ready</div>
+
+<script>
+var _bridge = null;
+
+function initBridge() {
+    try {
+        if (typeof QWebChannel !== 'undefined') {
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                _bridge = channel.objects.live2dBridge;
+                if (_bridge) {
+                    _bridge.on_model_loaded('fallback');
+                }
+            });
+        }
+    } catch (e) {
+        console.log('QWebChannel not available, running standalone');
+    }
+}
+
+var _characterConfig = {
+    name: '桌面宠物',
+    avatar: '🎀',
+    modelPath: 'model/model.model3.json',
+    scale: 1.0
+};
+
+function loadConfig(callback) {
+    callback(_characterConfig);
+}
+
+var _modelScale = 1.0;
+var _idleInterval = null;
+var _idleMs = 5000;
+var _motions = [];
+var _currentMotion = null;
+
+var _emojis = ['🎀', '🌸', '✨', '💖', '🌟', '🐱', '🎵', '🍀', '💫', '🦋'];
+
+function initFallback() {
+    document.getElementById('live2d-canvas').style.display = 'none';
+    document.getElementById('fallback-view').style.display = 'flex';
+    document.getElementById('fallback-name').textContent = _characterConfig.name;
+    document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+
+    document.getElementById('fallback-avatar').addEventListener('click', function() {
+        playRandomMotion();
+        var emojis = _emojis;
+        this.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+        setTimeout(function() {
+            document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+        }, 800);
+    });
+}
+
+function main() {
+    loadConfig(function(config) {
+        _characterConfig = config;
+        document.title = _characterConfig.name;
+        initBridge();
+
+        // 尝试启动 Live2D，如果失败则显示 fallback
+        var live2dStarted = startLive2D();
+        if (!live2dStarted) {
+            initFallback();
+        }
+    });
+}
+
+function playMotion(name, group) {
+    _currentMotion = name;
+    console.log('Motion:', name, group);
+    fallbackReaction(name);
+
+    if (_bridge) {
+        _bridge.on_motion_started(group || 'default', name);
+        setTimeout(function() {
+            _bridge.on_motion_finished(group || 'default', name);
+        }, 2000);
+    }
+}
+
+function setExpression(name) {
+    console.log('Expression:', name);
+    if (name === 'happy') {
+        document.getElementById('fallback-avatar').textContent = '😊';
+    } else if (name === 'surprised') {
+        document.getElementById('fallback-avatar').textContent = '😮';
+    } else if (name === 'sad') {
+        document.getElementById('fallback-avatar').textContent = '😢';
+    }
+    setTimeout(function() {
+        document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+    }, 1500);
+}
+
+function fallbackReaction(motion) {
+    var avatar = document.getElementById('fallback-avatar');
+    if (motion === 'happy' || motion === 'joy') {
+        avatar.textContent = '😊';
+    } else if (motion === 'surprised') {
+        avatar.textContent = '😮';
+    } else if (motion === 'sad' || motion === 'upset') {
+        avatar.textContent = '😢';
+    } else {
+        var emojis = _emojis;
+        avatar.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    }
+    setTimeout(function() {
+        avatar.textContent = _characterConfig.avatar;
+    }, 1500);
+}
+
+function playRandomMotion() {
+    var names = ['idle', 'happy', 'surprised', 'greeting', 'thinking'];
+    var name = names[Math.floor(Math.random() * names.length)];
+    playMotion(name);
+}
+
+function setMouseFollow(x, y) {}
+
+function setModelScale(scale) {
+    _modelScale = scale;
+    document.getElementById('fallback-avatar').style.transform = 'scale(' + scale + ')';
+}
+
+function startIdleTimer(intervalMs) {
+    stopIdleTimer();
+    _idleMs = intervalMs || 5000;
+    _idleInterval = setInterval(playRandomMotion, _idleMs);
+}
+
+function stopIdleTimer() {
+    if (_idleInterval) {
+        clearInterval(_idleInterval);
+        _idleInterval = null;
+    }
+}
+
+function startLive2D() {
+    var canvas = document.getElementById('live2d-canvas');
+    var fallback = document.getElementById('fallback-view');
+
+    try {
+        if (typeof PIXI === 'undefined' || typeof Live2DModel === 'undefined') {
+            return false;
+        }
+        document.getElementById('status-bar').textContent = 'Starting Live2D...';
+
+        var app = new PIXI.Application({
+            view: canvas,
+            width: canvas.clientWidth,
+            height: canvas.clientHeight,
+            transparent: true,
+            autoStart: true,
+            resizeTo: canvas
+        });
+
+        Live2DModel.from(_characterConfig.modelPath).then(function(model) {
+            app.stage.addChild(model);
+            model.scale.set(_modelScale);
+            model.x = app.view.width / 2;
+            model.y = app.view.height / 2;
+            model.anchor.set(0.5, 0.5);
+
+            model.on('hit', function(hitAreas) {
+                playMotion('tap_body');
+            });
+
+            document.getElementById('fallback-view').style.display = 'none';
+            document.getElementById('status-bar').textContent = 'Live2D Model Loaded';
+            document.getElementById('live2d-canvas').style.display = 'block';
+
+            if (_bridge) {
+                _bridge.on_model_loaded(_characterConfig.name);
+            }
+        }).catch(function(err) {
+            document.getElementById('status-bar').textContent = 'Model load failed: ' + err.message;
+            return false;
+        });
+
+        return true;
+    } catch (e) {
+        document.getElementById('status-bar').textContent = 'Live2D SDK not loaded';
+        return false;
+    }
+}
+
+window.onload = function() {
+    main();
+};
+</script>
+</body>
+</html>
