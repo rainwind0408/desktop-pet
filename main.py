@@ -37,18 +37,47 @@ def main():
     interaction_decider = InteractionDecider(environment_sensor=environment_sensor)
     media_sensor = MediaSensor(poll_interval=3.0)
 
-    # 初始化音乐追踪系统
-    character_name = character_manager.get_current_character_name() or "default"
-    music_tracker = MusicTracker(db_path=f"characters/{character_name}/music_history.db")
-    music_analyzer = MusicAnalyzer(
-        tracker=music_tracker,
-        profile_path=f"characters/{character_name}/music_profile.json"
-    )
-    atexit.register(music_tracker.cleanup_old_records, keep_days=90)  # 定期清理旧记录
+    # 音乐追踪系统（延迟初始化，等待角色切换）
+    music_tracker = [None]  # 使用列表以便在闭包中修改
+    music_analyzer = [None]
+
+    def init_music_system(character_name: str):
+        """初始化或重新初始化音乐追踪系统"""
+        db_path = f"characters/{character_name}/music_history.db"
+        profile_path = f"characters/{character_name}/music_profile.json"
+
+        # 如果路径没变，不重新初始化
+        if music_tracker[0] and music_tracker[0].db_path == db_path:
+            return
+
+        music_tracker[0] = MusicTracker(db_path=db_path)
+        music_analyzer[0] = MusicAnalyzer(
+            tracker=music_tracker[0],
+            profile_path=profile_path
+        )
+        character_manager.set_music_analyzer(music_analyzer[0])
+        print(f"音乐追踪系统已初始化: characters/{character_name}/")
+
+    # 保存原始的 switch_character 方法
+    original_switch = character_manager.switch_character
+
+    def switch_character_with_music(character_id: str):
+        """切换角色时同时初始化音乐系统"""
+        profile = original_switch(character_id)
+        init_music_system(character_id)
+        return profile
+
+    # 替换 switch_character 方法
+    character_manager.switch_character = switch_character_with_music
+
+    # 定期清理旧记录
+    def cleanup_music_records():
+        if music_tracker[0]:
+            music_tracker[0].cleanup_old_records(keep_days=90)
+    atexit.register(cleanup_music_records)
 
     character_manager.set_memory_system(memory_system)
     character_manager.set_environment_sensor(environment_sensor)
-    character_manager.set_music_analyzer(music_analyzer)
 
     api_key = llm_config.get("api_key", "")
     if api_key:
@@ -65,9 +94,9 @@ def main():
     # 媒体感知回调：交互决策 + 音乐记录
     def on_media_state_changed(state):
         interaction_decider.update_media_state(state)
-        # 记录音乐播放
-        if state.get("music_playing") and state.get("music_title"):
-            music_tracker.record_play(
+        # 记录音乐播放（需要音乐系统已初始化）
+        if music_tracker[0] and state.get("music_playing") and state.get("music_title"):
+            music_tracker[0].record_play(
                 title=state["music_title"],
                 artist=state.get("music_artist", ""),
                 platform=state.get("music_platform", ""),
