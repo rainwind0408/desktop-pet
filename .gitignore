@@ -39,3 +39,13 @@ logs/
 
 # LLM Config (contains API Keys)
 llm/config/*.json
+
+# SQLite temporary files
+*.db-shm
+*.db-wal
+
+# Model source files (large files)
+人物模型/
+
+# Test characters
+characters/test_*/
