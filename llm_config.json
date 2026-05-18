@@ -1,0 +1,8 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "api_base": "",
+  "temperature": 0.7,
+  "max_tokens": 2000,
+  "api_key": "sk-60a3794b906a45c99b13810a6cc8fbdc"
+}

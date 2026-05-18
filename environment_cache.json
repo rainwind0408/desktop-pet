@@ -1,0 +1,22 @@
+{
+  "weather_20260517": {
+    "city": "auto",
+    "condition": "未知",
+    "temperature": 20,
+    "temp_min": 15,
+    "temp_max": 25,
+    "humidity": 50,
+    "wind": "微风",
+    "description": "天气数据待获取"
+  },
+  "weather_20260518": {
+    "city": "auto",
+    "condition": "未知",
+    "temperature": 20,
+    "temp_min": 15,
+    "temp_max": 25,
+    "humidity": 50,
+    "wind": "微风",
+    "description": "天气数据待获取"
+  }
+}

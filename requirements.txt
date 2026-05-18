@@ -1,0 +1,11 @@
+# Python后端依赖
+pyqt5
+langchain
+openai
+faiss-cpu
+numpy
+flask
+flask-cors
+python-dotenv
+requests
+cryptography

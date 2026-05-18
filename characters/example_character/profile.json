@@ -1,0 +1,20 @@
+{
+  "characterId": "example_001",
+  "name": "示例角色",
+  "description": "示例角色描述",
+  "appearance": {
+    "modelPath": "/assets/model/model.model3.json",
+    "styleType": "live2d"
+  },
+  "personality": {
+    "prompt": "你是一个温柔体贴的虚拟宠物...",
+    "tone": "soft",
+    "style": "polite"
+  },
+  "preferences": {
+    "voice": "default_01",
+    "theme": "pastel"
+  },
+  "createdTime": "2024-01-01T00:00:00Z",
+  "lastModified": "2024-01-01T00:00:00Z"
+}
