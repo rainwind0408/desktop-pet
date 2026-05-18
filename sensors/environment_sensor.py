@@ -1,6 +1,11 @@
 """
 时空环境感知模块
 负责采集时间、纪念日、天气数据，组装环境提示词
+
+支持多个免费天气数据源：
+1. wttr.in - 无需 API Key，全球可用
+2. Open-Meteo - 无需 API Key，高精度
+3. 备用缓存 - 网络失败时使用
 """
 
 import json
@@ -100,6 +105,7 @@ class EnvironmentSensor:
         }
 
     def get_weather_info(self, city: str = "auto") -> Dict:
+        """获取天气信息，支持缓存和多数据源"""
         cache_key = f"weather_{datetime.now().strftime('%Y%m%d_%H')}"
         if cache_key in self.cache:
             return self.cache[cache_key]
@@ -130,12 +136,25 @@ class EnvironmentSensor:
         }
 
     def _fetch_weather_async(self, city: str, cache_key: str):
+        """异步获取天气，尝试多个数据源"""
         self._weather_fetching = True
         try:
+            # 尝试数据源 1: wttr.in
             weather = self._fetch_weather_wttr(city)
             if weather:
                 self.cache[cache_key] = weather
                 self._save_cache()
+                return
+
+            # 尝试数据源 2: Open-Meteo (需要坐标)
+            weather = self._fetch_weather_openmeteo(city)
+            if weather:
+                self.cache[cache_key] = weather
+                self._save_cache()
+                return
+
+            # 所有数据源失败，使用备用缓存
+            print("所有天气数据源获取失败，使用备用缓存")
         except Exception as e:
             print(f"天气获取失败: {e}")
         finally:
@@ -154,26 +173,21 @@ class EnvironmentSensor:
             area = data.get("nearest_area", [{}])[0]
             area_name = area.get("areaName", [{}])[0].get("value", "未知")
 
-            # 提取天气描述
+            # 提取天气描述（中文）
             weather_desc = current.get("lang_zh", [{}])
-            if weather_desc:
-                condition = weather_desc[0].get("value", current.get("weatherDesc", [{}])[0].get("value", ""))
+            if weather_desc and weather_desc[0].get("value"):
+                condition = weather_desc[0]["value"]
             else:
-                condition = current.get("weatherDesc", [{}])[0].get("value", "未知")
+                # 尝试英文描述并翻译
+                condition_en = current.get("weatherDesc", [{}])[0].get("value", "Unknown")
+                condition = self._translate_weather(condition_en)
 
             temp_c = int(current.get("temp_C", 20))
             humidity = int(current.get("humidity", 50))
             windspeed = float(current.get("windspeedKmph", 10))
 
             # 风力描述
-            if windspeed < 12:
-                wind = "微风"
-            elif windspeed < 30:
-                wind = "轻风"
-            elif windspeed < 50:
-                wind = "中风"
-            else:
-                wind = "大风"
+            wind = self._get_wind_description(windspeed)
 
             return {
                 "city": area_name,
@@ -184,10 +198,174 @@ class EnvironmentSensor:
                 "humidity": humidity,
                 "wind": wind,
                 "description": f"{area_name}，{condition}，{temp_c}℃，{wind}，湿度{humidity}%",
+                "source": "wttr.in",
             }
         except Exception as e:
             print(f"wttr.in 请求失败: {e}")
             return None
+
+    def _fetch_weather_openmeteo(self, city: str) -> Optional[Dict]:
+        """通过 Open-Meteo 获取天气（免费，无需 API Key，高精度）"""
+        try:
+            # 首先获取城市坐标
+            lat, lon, city_name = self._get_city_coordinates(city)
+            if lat is None:
+                return None
+
+            # 获取当前天气
+            url = (
+                f"https://api.open-meteo.com/v1/forecast?"
+                f"latitude={lat}&longitude={lon}"
+                f"&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
+                f"&daily=temperature_2m_max,temperature_2m_min"
+                f"&timezone=auto&forecast_days=1"
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "DesktopPet/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            current = data.get("current", {})
+            daily = data.get("daily", {})
+
+            temp_c = round(current.get("temperature_2m", 20))
+            humidity = round(current.get("relative_humidity_2m", 50))
+            weather_code = current.get("weather_code", 0)
+            windspeed = current.get("wind_speed_10m", 10)
+
+            condition = self._get_weather_description(weather_code)
+            wind = self._get_wind_description(windspeed)
+
+            temp_max = round(daily.get("temperature_2m_max", [temp_c + 3])[0])
+            temp_min = round(daily.get("temperature_2m_min", [temp_c - 3])[0])
+
+            return {
+                "city": city_name,
+                "condition": condition,
+                "temperature": temp_c,
+                "temp_min": temp_min,
+                "temp_max": temp_max,
+                "humidity": humidity,
+                "wind": wind,
+                "description": f"{city_name}，{condition}，{temp_c}℃，{wind}，湿度{humidity}%",
+                "source": "open-meteo",
+            }
+        except Exception as e:
+            print(f"Open-Meteo 请求失败: {e}")
+            return None
+
+    def _get_city_coordinates(self, city: str) -> tuple:
+        """获取城市坐标（使用 Open-Meteo Geocoding API）"""
+        try:
+            if city == "auto":
+                # 使用 IP 定位
+                return self._get_ip_location()
+
+            # 搜索城市
+            url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=zh"
+            req = urllib.request.Request(url, headers={"User-Agent": "DesktopPet/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            results = data.get("results", [])
+            if results:
+                result = results[0]
+                return result["latitude"], result["longitude"], result.get("name", city)
+        except Exception:
+            pass
+        return None, None, city
+
+    def _get_ip_location(self) -> tuple:
+        """通过 IP 获取大致位置"""
+        try:
+            # 使用免费的 IP 定位服务
+            url = "http://ip-api.com/json/?lang=zh-CN"
+            req = urllib.request.Request(url, headers={"User-Agent": "DesktopPet/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            if data.get("status") == "success":
+                lat = data.get("lat")
+                lon = data.get("lon")
+                city_name = data.get("city", "未知")
+                return lat, lon, city_name
+        except Exception:
+            pass
+        # 默认北京坐标
+        return 39.9042, 116.4074, "北京"
+
+    def _get_weather_description(self, code: int) -> str:
+        """将 WMO 天气代码转换为中文描述"""
+        weather_codes = {
+            0: "晴朗",
+            1: "大部晴朗",
+            2: "局部多云",
+            3: "多云",
+            45: "雾",
+            48: "雾凇",
+            51: "小毛毛雨",
+            53: "中毛毛雨",
+            55: "大毛毛雨",
+            56: "冻毛毛雨",
+            57: "强冻毛毛雨",
+            61: "小雨",
+            63: "中雨",
+            65: "大雨",
+            66: "小冻雨",
+            67: "大冻雨",
+            71: "小雪",
+            73: "中雪",
+            75: "大雪",
+            77: "雪粒",
+            80: "小阵雨",
+            81: "中阵雨",
+            82: "大阵雨",
+            85: "小阵雪",
+            86: "大阵雪",
+            95: "雷暴",
+            96: "雷暴伴小冰雹",
+            99: "雷暴伴大冰雹",
+        }
+        return weather_codes.get(code, "未知")
+
+    def _translate_weather(self, english_desc: str) -> str:
+        """将英文天气描述翻译为中文"""
+        translations = {
+            "Clear": "晴朗",
+            "Sunny": "晴天",
+            "Partly Cloudy": "局部多云",
+            "Cloudy": "多云",
+            "Overcast": "阴天",
+            "Mist": "薄雾",
+            "Fog": "雾",
+            "Light Rain": "小雨",
+            "Rain": "雨",
+            "Heavy Rain": "大雨",
+            "Light Snow": "小雪",
+            "Snow": "雪",
+            "Heavy Snow": "大雪",
+            "Thunderstorm": "雷暴",
+            "Drizzle": "毛毛雨",
+            "Showers": "阵雨",
+        }
+        for en, zh in translations.items():
+            if en.lower() in english_desc.lower():
+                return zh
+        return english_desc
+
+    def _get_wind_description(self, speed_kmph: float) -> str:
+        """根据风速返回中文描述"""
+        if speed_kmph < 1:
+            return "无风"
+        elif speed_kmph < 12:
+            return "微风"
+        elif speed_kmph < 30:
+            return "轻风"
+        elif speed_kmph < 50:
+            return "中风"
+        elif speed_kmph < 75:
+            return "大风"
+        else:
+            return "狂风"
 
     def get_mood_params(self, weather: Dict, anniversary: Dict) -> Dict:
         temp = weather.get("temperature", 20)
