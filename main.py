@@ -8,13 +8,11 @@ import os
 import sys
 import threading
 from PyQt5.QtWidgets import QApplication
-from pet_window import PetWindow
-from character_manager import CharacterManager
-from memory_system import MemorySystem
-from environment_sensor import EnvironmentSensor
-from interaction_decider import InteractionDecider
-from media_sensor import MediaSensor
-from api_server import APIServer
+from gui import PetWindow
+from core import CharacterManager, MemorySystem
+from sensors import EnvironmentSensor, MediaSensor
+from decision import InteractionDecider
+from api import APIServer
 from llm import LLMFactory
 from llm.factory import load_main_config, get_full_config
 
