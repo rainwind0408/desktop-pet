@@ -47,5 +47,11 @@ llm/config/*.json
 # Model source files (large files)
 人物模型/
 
+# Model assets (large binary files)
+characters/*/assets/model/
+
+# Old files
+gui/live2d_widget.py
+
 # Test characters
 characters/test_*/
