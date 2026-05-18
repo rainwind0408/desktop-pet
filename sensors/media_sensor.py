@@ -34,6 +34,12 @@ MUSIC_PLAYER_PROCESSES = {
     "kuwo": "酷我音乐",
     "foobar2000": "foobar2000",
     "MusicPlayer": "音乐播放器",
+    "kgmusic": "酷狗音乐",
+    "kwmusic": "酷我音乐",
+    "AppleMusic": "Apple Music",
+    "iTunes": "iTunes",
+    "汽水音乐": "汽水音乐",
+    "qishui": "汽水音乐",
 }
 
 
@@ -97,6 +103,8 @@ class MediaSensor:
             "music_playing": False,
             "music_title": "",
             "music_artist": "",
+            "music_album": "",
+            "music_platform": "",
             "music_bpm": 0,
             "music_genre": "",
             "video_playing": False,
@@ -191,10 +199,14 @@ class MediaSensor:
                     return None
                 info = await session.try_get_media_properties_async()
                 playback = session.get_playback_info()
+                # 获取来源应用
+                source_app = session.source_app_user_model_id or ""
                 return {
                     "title": info.title or "",
                     "artist": info.artist or "",
+                    "album": info.album_title or "",
                     "playing": playback.playback_status == 4,  # Playing
+                    "source_app": source_app,
                 }
 
             loop = asyncio.new_event_loop()
@@ -204,6 +216,10 @@ class MediaSensor:
                     self.state["music_playing"] = result["playing"]
                     self.state["music_title"] = result["title"]
                     self.state["music_artist"] = result["artist"]
+                    self.state["music_album"] = result.get("album", "")
+                    # 识别平台
+                    source_app = result.get("source_app", "")
+                    self.state["music_platform"] = self._identify_platform(source_app)
                     if not result["playing"]:
                         self.state["music_playing"] = False
             finally:
@@ -219,14 +235,17 @@ class MediaSensor:
         # 检查是否是音乐播放器
         is_music_app = False
         app_name = ""
+        platform = ""
         for proc_key, name in MUSIC_PLAYER_PROCESSES.items():
             if proc_key.lower() in process.lower() or proc_key.lower() in title.lower():
                 is_music_app = True
                 app_name = name
+                platform = name
                 break
 
         if is_music_app:
             self.state["music_playing"] = True
+            self.state["music_platform"] = platform
             # 尝试从标题提取歌名
             # 常见格式: "歌名 - 歌手" 或 "歌名 - 歌手 - 网易云音乐"
             match = re.search(r'^(.+?)\s*[-–—]\s*(.+?)(?:\s*[-–—]|$)', title)
@@ -240,6 +259,37 @@ class MediaSensor:
             self.state["music_playing"] = False
             self.state["music_title"] = ""
             self.state["music_artist"] = ""
+            self.state["music_platform"] = ""
+
+    def _identify_platform(self, source_app: str) -> str:
+        """根据 SMTC 来源应用识别音乐平台"""
+        source_lower = source_app.lower()
+
+        platform_map = {
+            "cloudmusic": "网易云音乐",
+            "netease": "网易云音乐",
+            "qqmusic": "QQ音乐",
+            "spotify": "Spotify",
+            "kugou": "酷狗音乐",
+            "kuwo": "酷我音乐",
+            "foobar2000": "foobar2000",
+            "apple music": "Apple Music",
+            "itunes": "iTunes",
+            "汽水音乐": "汽水音乐",
+            "qishui": "汽水音乐",
+        }
+
+        for key, name in platform_map.items():
+            if key in source_lower:
+                return name
+
+        # 如果无法识别，尝试从窗口标题获取
+        title = self.state.get("active_window_title", "")
+        for proc_key, name in MUSIC_PLAYER_PROCESSES.items():
+            if proc_key.lower() in title.lower():
+                return name
+
+        return ""
 
     def _detect_video(self):
         """检测视频播放"""
@@ -269,8 +319,8 @@ class MediaSensor:
     def _state_changed(self, old: Dict) -> bool:
         """检测状态是否发生有意义的变化"""
         keys_to_check = [
-            "music_playing", "music_title", "video_playing",
-            "video_title", "active_app"
+            "music_playing", "music_title", "music_artist", "music_platform",
+            "video_playing", "video_title", "active_app"
         ]
         return any(old.get(k) != self.state.get(k) for k in keys_to_check)
 

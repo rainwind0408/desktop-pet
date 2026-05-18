@@ -10,8 +10,8 @@ import sys
 import threading
 from PyQt5.QtWidgets import QApplication
 from gui import PetWindow
-from core import CharacterManager, MemorySystem
-from sensors import EnvironmentSensor, MediaSensor
+from core import CharacterManager, MemorySystem, MusicAnalyzer
+from sensors import EnvironmentSensor, MediaSensor, MusicTracker
 from decision import InteractionDecider
 from api import APIServer
 from llm import LLMFactory
@@ -37,8 +37,18 @@ def main():
     interaction_decider = InteractionDecider(environment_sensor=environment_sensor)
     media_sensor = MediaSensor(poll_interval=3.0)
 
+    # 初始化音乐追踪系统
+    character_name = character_manager.get_current_character_name() or "default"
+    music_tracker = MusicTracker(db_path=f"characters/{character_name}/music_history.db")
+    music_analyzer = MusicAnalyzer(
+        tracker=music_tracker,
+        profile_path=f"characters/{character_name}/music_profile.json"
+    )
+    atexit.register(music_tracker.cleanup_old_records, keep_days=90)  # 定期清理旧记录
+
     character_manager.set_memory_system(memory_system)
     character_manager.set_environment_sensor(environment_sensor)
+    character_manager.set_music_analyzer(music_analyzer)
 
     api_key = llm_config.get("api_key", "")
     if api_key:
@@ -52,8 +62,20 @@ def main():
     else:
         print("LLM 未配置 API Key，将在设置中配置后启用")
 
+    # 媒体感知回调：交互决策 + 音乐记录
+    def on_media_state_changed(state):
+        interaction_decider.update_media_state(state)
+        # 记录音乐播放
+        if state.get("music_playing") and state.get("music_title"):
+            music_tracker.record_play(
+                title=state["music_title"],
+                artist=state.get("music_artist", ""),
+                platform=state.get("music_platform", ""),
+                source="smtc"
+            )
+
     # 启动媒体感知 -> 交互决策联动
-    media_sensor.start(callback=lambda state: interaction_decider.update_media_state(state))
+    media_sensor.start(callback=on_media_state_changed)
     interaction_decider.start()
 
     api_server = APIServer(

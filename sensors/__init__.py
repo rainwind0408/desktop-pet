@@ -5,5 +5,6 @@
 
 from .environment_sensor import EnvironmentSensor
 from .media_sensor import MediaSensor
+from .music_tracker import MusicTracker
 
-__all__ = ['EnvironmentSensor', 'MediaSensor']
+__all__ = ['EnvironmentSensor', 'MediaSensor', 'MusicTracker']

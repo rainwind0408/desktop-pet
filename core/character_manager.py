@@ -16,12 +16,26 @@ class CharacterManager:
         self.characters_dir = characters_dir
         self.memory_system = None
         self.environment_sensor = None
+        self.music_analyzer = None
 
     def set_memory_system(self, memory_system):
         self.memory_system = memory_system
 
     def set_environment_sensor(self, environment_sensor):
         self.environment_sensor = environment_sensor
+
+    def set_music_analyzer(self, music_analyzer):
+        self.music_analyzer = music_analyzer
+
+    def get_current_character_name(self) -> Optional[str]:
+        """获取当前角色名称"""
+        if not self.current_character_id:
+            return None
+        try:
+            profile = self.load_character_profile(self.current_character_id)
+            return profile.get("name", self.current_character_id)
+        except Exception:
+            return self.current_character_id
 
     def get_available_characters(self) -> List[str]:
         if not os.path.exists(self.characters_dir):
@@ -140,11 +154,17 @@ class CharacterManager:
                 self.current_character_id, user_input
             )
 
+        music_prompt = ""
+        if self.music_analyzer:
+            music_prompt = self.music_analyzer.build_music_prompt()
+
         system_content = personality_prompt
         if env_prompt:
             system_content += f"\n\n{env_prompt}"
         if memory_prompt:
             system_content += f"\n\n{memory_prompt}"
+        if music_prompt:
+            system_content += f"\n\n{music_prompt}"
 
         messages = [
             {"role": "system", "content": system_content},
