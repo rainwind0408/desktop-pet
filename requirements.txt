@@ -1,5 +1,6 @@
 # Python后端依赖
 pyqt5
+PyQtWebEngine
 langchain
 openai
 faiss-cpu
