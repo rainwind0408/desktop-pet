@@ -14,7 +14,7 @@ from .provider import BaseLLMProvider, OpenAICompatibleProvider, AnthropicProvid
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
 
 # 主配置文件路径（只存储当前激活的提供商）
-MAIN_CONFIG_PATH = "llm_config.json"
+MAIN_CONFIG_PATH = "llm/llm_config.json"
 
 
 PROVIDER_PRESETS = {

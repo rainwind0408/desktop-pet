@@ -14,7 +14,7 @@ from typing import Dict, Optional
 
 
 class EnvironmentSensor:
-    def __init__(self, cache_file: str = "environment_cache.json"):
+    def __init__(self, cache_file: str = "sensors/environment_cache.json"):
         self.cache_file = cache_file
         self.cache: Dict = {}
         self._load_cache()
