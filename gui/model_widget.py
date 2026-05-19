@@ -62,6 +62,8 @@ class ModelWidget(QWidget):
         self._fallback_label.hide()
 
         self._web_view = QWebEngineView(self)
+        # 禁用 WebEngineView 的默认上下文菜单
+        self._web_view.setContextMenuPolicy(Qt.NoContextMenu)
         # 安装事件过滤器，拦截 WebEngineView 的鼠标事件
         self._web_view.installEventFilter(self)
 
@@ -81,62 +83,42 @@ class ModelWidget(QWidget):
     def eventFilter(self, obj, event):
         """事件过滤器：拦截 WebEngineView 的鼠标事件"""
         if obj == self._web_view:
-            if event.type() == event.MouseButtonPress:
-                self.mousePressEvent(event)
+            from PyQt5.QtCore import QEvent
+            if event.type() == QEvent.MouseButtonPress:
+                self._handle_mouse_press(event)
                 return True
-            elif event.type() == event.MouseMove:
-                self.mouseMoveEvent(event)
+            elif event.type() == QEvent.MouseMove:
+                self._handle_mouse_move(event)
                 return True
-            elif event.type() == event.MouseButtonRelease:
-                self.mouseReleaseEvent(event)
-                return True
-            elif event.type() == event.ContextMenu:
-                self.contextMenuEvent(event)
+            elif event.type() == QEvent.MouseButtonRelease:
+                self._handle_mouse_release(event)
                 return True
         return super().eventFilter(obj, event)
 
-    def mousePressEvent(self, event):
-        """鼠标按下事件"""
+    def _handle_mouse_press(self, event):
+        """处理鼠标按下"""
         if event.button() == Qt.LeftButton:
             self._drag_start_pos = event.globalPos()
             self._is_dragging = False
-            event.accept()
 
-    def mouseMoveEvent(self, event):
-        """鼠标移动事件 - 实现拖拽"""
+    def _handle_mouse_move(self, event):
+        """处理鼠标移动 - 实现拖拽"""
         if event.buttons() & Qt.LeftButton and self._drag_start_pos:
-            # 计算移动距离
             delta = event.globalPos() - self._drag_start_pos
             if not self._is_dragging and (abs(delta.x()) > 3 or abs(delta.y()) > 3):
                 self._is_dragging = True
 
             if self._is_dragging:
-                # 移动父窗口
                 window = self.window()
                 if window:
                     window.move(window.pos() + delta)
                 self._drag_start_pos = event.globalPos()
-            event.accept()
 
-    def mouseReleaseEvent(self, event):
-        """鼠标释放事件"""
+    def _handle_mouse_release(self, event):
+        """处理鼠标释放"""
         if event.button() == Qt.LeftButton:
             self._drag_start_pos = None
             self._is_dragging = False
-            event.accept()
-
-    def contextMenuEvent(self, event):
-        """右键菜单事件 - 传递给父窗口"""
-        # 将事件传递给父窗口处理
-        parent = self.parent()
-        while parent:
-            if hasattr(parent, 'show_context_menu'):
-                parent.show_context_menu(event.globalPos())
-                event.accept()
-                return
-            parent = parent.parent()
-        # 如果没有找到处理方法，使用默认处理
-        super().contextMenuEvent(event)
 
     def _init_model_manager(self):
         """初始化模型管理器"""
