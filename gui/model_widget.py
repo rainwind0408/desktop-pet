@@ -64,7 +64,9 @@ class ModelWidget(QWidget):
         self._web_view = QWebEngineView(self)
         # 禁用 WebEngineView 的默认上下文菜单
         self._web_view.setContextMenuPolicy(Qt.NoContextMenu)
-        # 安装事件过滤器，拦截 WebEngineView 的鼠标事件
+        # 在 ModelWidget 上安装事件过滤器，监听所有子部件事件
+        self.installEventFilter(self)
+        # 同时也安装到 web_view 上
         self._web_view.installEventFilter(self)
 
         layout.addWidget(self._web_view)
@@ -81,18 +83,21 @@ class ModelWidget(QWidget):
         self._bridge.motion_finished.connect(self._on_motion_finished)
 
     def eventFilter(self, obj, event):
-        """事件过滤器：拦截 WebEngineView 的鼠标事件"""
-        if obj == self._web_view:
-            from PyQt5.QtCore import QEvent
-            if event.type() == QEvent.MouseButtonPress:
-                self._handle_mouse_press(event)
-                return True
-            elif event.type() == QEvent.MouseMove:
-                self._handle_mouse_move(event)
-                return True
-            elif event.type() == QEvent.MouseButtonRelease:
-                self._handle_mouse_release(event)
-                return True
+        """事件过滤器：拦截鼠标事件"""
+        from PyQt5.QtCore import QEvent
+        # 只处理鼠标事件
+        if event.type() in (QEvent.MouseButtonPress, QEvent.MouseMove, QEvent.MouseButtonRelease):
+            # 检查事件是否在 ModelWidget 区域内
+            if self.rect().contains(self.mapFromGlobal(event.globalPos())):
+                if event.type() == QEvent.MouseButtonPress:
+                    self._handle_mouse_press(event)
+                    return True
+                elif event.type() == QEvent.MouseMove:
+                    self._handle_mouse_move(event)
+                    return True
+                elif event.type() == QEvent.MouseButtonRelease:
+                    self._handle_mouse_release(event)
+                    return True
         return super().eventFilter(obj, event)
 
     def _handle_mouse_press(self, event):
