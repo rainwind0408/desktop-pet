@@ -143,6 +143,62 @@ function updateDebugPanel() {
 
 // 定期更新调试面板
 setInterval(updateDebugPanel, 1000);
+
+// 日志系统
+window.logHistory = [];
+window.maxLogHistory = 100;
+
+function addLog(level, message) {
+    const entry = {
+        timestamp: new Date().toISOString(),
+        level: level,
+        message: message
+    };
+    window.logHistory.push(entry);
+    if (window.logHistory.length > window.maxLogHistory) {
+        window.logHistory.shift();
+    }
+    return entry;
+}
+
+// 重写 console 方法以捕获日志
+const originalConsole = {
+    log: console.log,
+    error: console.error,
+    warn: console.warn
+};
+
+console.log = function() {
+    originalConsole.log.apply(console, arguments);
+    addLog('info', Array.from(arguments).join(' '));
+};
+
+console.error = function() {
+    originalConsole.error.apply(console, arguments);
+    addLog('error', Array.from(arguments).join(' '));
+};
+
+console.warn = function() {
+    originalConsole.warn.apply(console, arguments);
+    addLog('warn', Array.from(arguments).join(' '));
+};
+
+// 获取日志历史
+window.getLogHistory = function(level, limit) {
+    let logs = window.logHistory;
+    if (level) {
+        logs = logs.filter(log => log.level === level);
+    }
+    if (limit) {
+        logs = logs.slice(-limit);
+    }
+    return logs;
+};
+
+// 清除日志历史
+window.clearLogHistory = function() {
+    window.logHistory = [];
+};
 </script>
 
 </body>

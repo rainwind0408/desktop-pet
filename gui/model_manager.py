@@ -73,6 +73,16 @@ class ModelManager(QObject):
         self._ready_check_timer.setSingleShot(True)
         self._ready_check_timer.timeout.connect(self._check_ready_timeout)
 
+        # 内存监控定时器
+        self._memory_monitor_timer = QTimer()
+        self._memory_monitor_timer.timeout.connect(self._check_memory_pressure)
+        self._memory_monitor_timer.start(30000)  # 每 30 秒检查一次
+
+        # 缓存配置
+        self._cache_max_size = 5
+        self._cache_min_size = 2
+        self._memory_pressure_threshold = 0.8  # 80% 内存使用率触发清理
+
         # 设置 WebChannel
         self._setup_bridge()
 
@@ -155,10 +165,24 @@ class ModelManager(QObject):
             QTimer.singleShot(1000, self._start_engine_init)
             return
 
-        # JS 端就绪，开始初始化引擎
-        print("[ModelManager] JS ready, initializing engines...", flush=True)
-        self._init_engine(ModelType.VRM)
-        self._init_engine(ModelType.LIVE2D)
+        # JS 端就绪，按需初始化引擎
+        print("[ModelManager] JS ready, initializing engines on demand...", flush=True)
+
+        # 检查队列中是否有待处理的命令，只初始化需要的引擎
+        if self._command_queue:
+            # 只初始化队列中第一个命令需要的引擎
+            _, first_type = self._command_queue[0]
+            print(f"[ModelManager] Pre-initializing {first_type.value} engine for queued command", flush=True)
+            self._init_engine(first_type)
+            # 延迟初始化另一个引擎
+            other_type = ModelType.LIVE2D if first_type == ModelType.VRM else ModelType.VRM
+            QTimer.singleShot(2000, lambda: self._init_engine(other_type))
+        else:
+            # 没有待处理命令，初始化 VRM 引擎（默认）
+            print(f"[ModelManager] Pre-initializing VRM engine (default)", flush=True)
+            self._init_engine(ModelType.VRM)
+            # 延迟初始化 Live2D 引擎
+            QTimer.singleShot(2000, lambda: self._init_engine(ModelType.LIVE2D))
 
     def _init_engine(self, engine_type):
         """初始化指定引擎"""
@@ -409,6 +433,17 @@ class ModelManager(QObject):
         js_code = "window.getPerformanceReport ? window.getPerformanceReport() : null;"
         return self.web_view.page().runJavaScript(js_code)
 
+    def get_log_history(self, level=None, limit=50):
+        """获取 JS 端日志历史"""
+        level_param = f"'{level}'" if level else "null"
+        js_code = f"window.getLogHistory ? window.getLogHistory({level_param}, {limit}) : [];"
+        return self.web_view.page().runJavaScript(js_code)
+
+    def clear_log_history(self):
+        """清除 JS 端日志历史"""
+        js_code = "if (window.clearLogHistory) window.clearLogHistory();"
+        self.web_view.page().runJavaScript(js_code)
+
     def clear_cache(self):
         """清空模型缓存"""
         js_code = "if (window.clearCache) window.clearCache();"
@@ -433,13 +468,43 @@ class ModelManager(QObject):
             'current_type': self.current_type.value if self.current_type else None,
             'engines_ready': {t.value: r for t, r in self.engines_ready.items()},
             'queue_size': len(self._command_queue),
-            'is_switching': self.is_switching
+            'is_switching': self.is_switching,
+            'cache_max_size': self._cache_max_size
         }
+
+    def _check_memory_pressure(self):
+        """检查内存压力，动态调整缓存大小"""
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            usage_ratio = memory.percent / 100.0
+
+            # 根据内存使用率调整缓存大小
+            if usage_ratio > self._memory_pressure_threshold:
+                # 内存压力大，减小缓存
+                new_size = max(self._cache_min_size, self._cache_max_size - 1)
+                if new_size != self._cache_max_size:
+                    self._cache_max_size = new_size
+                    self.set_cache_config(self._cache_max_size)
+                    print(f"[ModelManager] Memory pressure high ({usage_ratio:.1%}), cache size: {self._cache_max_size}")
+            elif usage_ratio < 0.6 and self._cache_max_size < 5:
+                # 内存充足，可以增加缓存
+                new_size = min(5, self._cache_max_size + 1)
+                if new_size != self._cache_max_size:
+                    self._cache_max_size = new_size
+                    self.set_cache_config(self._cache_max_size)
+                    print(f"[ModelManager] Memory OK ({usage_ratio:.1%}), cache size: {self._cache_max_size}")
+        except ImportError:
+            # psutil 未安装，跳过内存检查
+            pass
+        except Exception as e:
+            print(f"[ModelManager] Memory check error: {e}")
 
     def cleanup(self):
         """清理所有资源"""
         self.load_timeout_timer.stop()
         self._ready_check_timer.stop()
+        self._memory_monitor_timer.stop()
         self._command_queue.clear()
 
         js_code = "if (window.cleanup) window.cleanup();"
