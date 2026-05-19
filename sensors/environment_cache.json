@@ -1,22 +1,13 @@
 {
-  "weather_20260517": {
-    "city": "auto",
-    "condition": "未知",
-    "temperature": 20,
-    "temp_min": 15,
+  "weather_20260519_13": {
+    "city": "Yenchuang",
+    "condition": "Overcast",
+    "temperature": 22,
+    "temp_min": 19,
     "temp_max": 25,
-    "humidity": 50,
-    "wind": "微风",
-    "description": "天气数据待获取"
-  },
-  "weather_20260518": {
-    "city": "auto",
-    "condition": "未知",
-    "temperature": 20,
-    "temp_min": 15,
-    "temp_max": 25,
-    "humidity": 50,
-    "wind": "微风",
-    "description": "天气数据待获取"
+    "humidity": 73,
+    "wind": "轻风",
+    "description": "Yenchuang，Overcast，22℃，轻风，湿度73%",
+    "source": "wttr.in"
   }
 }

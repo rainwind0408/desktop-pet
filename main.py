@@ -15,7 +15,8 @@ from sensors import EnvironmentSensor, MediaSensor, MusicTracker
 from decision import InteractionDecider
 from api import APIServer
 from llm import LLMFactory
-from llm.factory import load_main_config, get_full_config
+from llm.factory import load_main_config, get_full_config, PROVIDER_PRESETS
+from llm.model_updater import initialize_cache, start_background_updater
 
 
 def start_api_server(api_server: APIServer):
@@ -91,6 +92,23 @@ def main():
     else:
         print("LLM 未配置 API Key，将在设置中配置后启用")
 
+    # 收集所有提供商的用户配置（含 api_key），用于模型更新时的 API 认证
+    provider_configs = {}
+    for key in PROVIDER_PRESETS:
+        config_path = f"llm/config/{key}.json"
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    provider_configs[key] = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                provider_configs[key] = {}
+        else:
+            provider_configs[key] = {}
+
+    # 初始化模型缓存并启动后台自动更新线程
+    initialize_cache(PROVIDER_PRESETS)
+    start_background_updater(PROVIDER_PRESETS, provider_configs)
+
     # 媒体感知回调：交互决策 + 音乐记录
     def on_media_state_changed(state):
         interaction_decider.update_media_state(state)
@@ -123,18 +141,26 @@ def main():
     api_thread.start()
     print("Flask API 服务已启动: http://127.0.0.1:5000")
 
+    print("Creating QApplication...", flush=True)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    print("Creating PetWindow...", flush=True)
     window = PetWindow()
+    print("PetWindow created", flush=True)
     window.set_character_manager(character_manager)
+    print("Character manager set", flush=True)
 
-    print("桌面宠物系统启动完成")
+    # 注册回调：API 切换角色时刷新 GUI（通过信号跨线程调用）
+    api_server._on_character_switched = window.character_switch_requested.emit
+
+    print("桌面宠物系统启动完成", flush=True)
     print(f"可用角色: {character_manager.get_available_characters()}")
 
     characters = character_manager.get_available_characters()
     if characters:
         character_manager.switch_character(characters[0])
+        window.update_pet_display()
 
     sys.exit(app.exec_())
 

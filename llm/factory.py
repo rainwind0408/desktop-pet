@@ -8,6 +8,7 @@ import os
 from typing import Dict, List, Optional
 
 from .provider import BaseLLMProvider, OpenAICompatibleProvider, AnthropicProvider
+from . import model_updater
 
 
 # 配置文件目录
@@ -115,6 +116,29 @@ PROVIDER_PRESETS = {
         "api_key_env": "CUSTOM_API_KEY",
     },
 }
+
+
+def _patch_presets_from_cache():
+    """从模型缓存动态更新 PROVIDER_PRESETS 中的 models 和 default_model"""
+    cache = model_updater.load_cache()
+    providers = cache.get("providers", {})
+    for key, cached in providers.items():
+        if key in PROVIDER_PRESETS:
+            cached_models = cached.get("models", [])
+            if cached_models:
+                PROVIDER_PRESETS[key]["models"] = cached_models
+            cached_default = cached.get("default_model", "")
+            if cached_default:
+                PROVIDER_PRESETS[key]["default_model"] = cached_default
+
+
+def reload_models():
+    """强制从缓存重新加载模型列表"""
+    _patch_presets_from_cache()
+
+
+# 模块加载时自动从缓存更新模型列表
+_patch_presets_from_cache()
 
 
 def get_provider_config_path(provider_key: str) -> str:

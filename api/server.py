@@ -25,6 +25,7 @@ class APIServer:
         self.memory_system = memory_system
         self.interaction_decider = interaction_decider
         self.media_sensor = media_sensor
+        self._on_character_switched = None
 
         self._register_routes()
 
@@ -72,6 +73,11 @@ class APIServer:
                 return jsonify({"error": "缺少 characterId"}), 400
             try:
                 profile = self.character_manager.switch_character(character_id)
+                if self._on_character_switched:
+                    try:
+                        self._on_character_switched()
+                    except Exception:
+                        pass
                 return jsonify(profile)
             except Exception as e:
                 return jsonify({"error": str(e)}), 404
