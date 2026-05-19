@@ -9,12 +9,86 @@
 import os
 
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QPoint, QEvent
 from PyQt5.QtGui import QColor, QMouseEvent
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
 from .live2d_bridge import Live2DBridge
 from .model_manager import ModelManager, ModelType
+
+
+class MouseTransparentOverlay(QWidget):
+    """透明覆盖层，用于捕获鼠标事件"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 设置鼠标跟踪，以便接收 MouseMove 事件
+        self.setMouseTracking(True)
+        # 设置焦点策略
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def paintEvent(self, event):
+        """不绘制任何内容，保持透明"""
+        pass
+
+    def mousePressEvent(self, event):
+        """鼠标按下事件 - 传递给父窗口"""
+        if self.parent():
+            # 创建一个新事件，将坐标转换为父窗口坐标
+            new_pos = self.mapToParent(event.pos())
+            new_event = QMouseEvent(
+                event.type(),
+                new_pos,
+                event.globalPos(),
+                event.button(),
+                event.buttons(),
+                event.modifiers()
+            )
+            self.parent().mousePressEvent(new_event)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 传递给父窗口"""
+        if self.parent():
+            new_pos = self.mapToParent(event.pos())
+            new_event = QMouseEvent(
+                event.type(),
+                new_pos,
+                event.globalPos(),
+                event.button(),
+                event.buttons(),
+                event.modifiers()
+            )
+            self.parent().mouseMoveEvent(new_event)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件 - 传递给父窗口"""
+        if self.parent():
+            new_pos = self.mapToParent(event.pos())
+            new_event = QMouseEvent(
+                event.type(),
+                new_pos,
+                event.globalPos(),
+                event.button(),
+                event.buttons(),
+                event.modifiers()
+            )
+            self.parent().mouseReleaseEvent(new_event)
+        event.accept()
+
+    def contextMenuEvent(self, event):
+        """右键菜单事件 - 传递给父窗口"""
+        if self.parent():
+            # 让父窗口处理右键菜单
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'show_context_menu'):
+                    parent.show_context_menu(event.globalPos())
+                    event.accept()
+                    return
+                parent = parent.parent()
+        event.accept()
 
 
 CHARACTERS_DIR = os.path.abspath(
@@ -64,10 +138,9 @@ class ModelWidget(QWidget):
         self._web_view = QWebEngineView(self)
         # 禁用 WebEngineView 的默认上下文菜单
         self._web_view.setContextMenuPolicy(Qt.NoContextMenu)
-        # 在 ModelWidget 上安装事件过滤器，监听所有子部件事件
-        self.installEventFilter(self)
-        # 同时也安装到 web_view 上
-        self._web_view.installEventFilter(self)
+
+        # 创建透明覆盖层，用于捕获鼠标事件
+        self._overlay = MouseTransparentOverlay(self)
 
         layout.addWidget(self._web_view)
         layout.addWidget(self._fallback_label)
@@ -82,32 +155,21 @@ class ModelWidget(QWidget):
         self._bridge.motion_started.connect(self._on_motion_started)
         self._bridge.motion_finished.connect(self._on_motion_finished)
 
-    def eventFilter(self, obj, event):
-        """事件过滤器：拦截鼠标事件"""
-        from PyQt5.QtCore import QEvent
-        # 只处理鼠标事件
-        if event.type() in (QEvent.MouseButtonPress, QEvent.MouseMove, QEvent.MouseButtonRelease):
-            # 检查事件是否在 ModelWidget 区域内
-            if self.rect().contains(self.mapFromGlobal(event.globalPos())):
-                if event.type() == QEvent.MouseButtonPress:
-                    self._handle_mouse_press(event)
-                    return True
-                elif event.type() == QEvent.MouseMove:
-                    self._handle_mouse_move(event)
-                    return True
-                elif event.type() == QEvent.MouseButtonRelease:
-                    self._handle_mouse_release(event)
-                    return True
-        return super().eventFilter(obj, event)
+    def resizeEvent(self, event):
+        """窗口大小改变时，调整覆盖层大小"""
+        super().resizeEvent(event)
+        if hasattr(self, '_overlay'):
+            self._overlay.setGeometry(self.rect())
 
-    def _handle_mouse_press(self, event):
-        """处理鼠标按下"""
+    def mousePressEvent(self, event):
+        """鼠标按下事件"""
         if event.button() == Qt.LeftButton:
             self._drag_start_pos = event.globalPos()
             self._is_dragging = False
+            event.accept()
 
-    def _handle_mouse_move(self, event):
-        """处理鼠标移动 - 实现拖拽"""
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 实现拖拽"""
         if event.buttons() & Qt.LeftButton and self._drag_start_pos:
             delta = event.globalPos() - self._drag_start_pos
             if not self._is_dragging and (abs(delta.x()) > 3 or abs(delta.y()) > 3):
@@ -118,12 +180,25 @@ class ModelWidget(QWidget):
                 if window:
                     window.move(window.pos() + delta)
                 self._drag_start_pos = event.globalPos()
+            event.accept()
 
-    def _handle_mouse_release(self, event):
-        """处理鼠标释放"""
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件"""
         if event.button() == Qt.LeftButton:
             self._drag_start_pos = None
             self._is_dragging = False
+            event.accept()
+
+    def contextMenuEvent(self, event):
+        """右键菜单事件 - 传递给父窗口"""
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, 'show_context_menu'):
+                parent.show_context_menu(event.globalPos())
+                event.accept()
+                return
+            parent = parent.parent()
+        super().contextMenuEvent(event)
 
     def _init_model_manager(self):
         """初始化模型管理器"""
