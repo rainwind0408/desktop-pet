@@ -215,7 +215,7 @@ class UnifiedRenderer {
         });
         renderer.setSize(container.clientWidth, container.clientHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.setClearColor(0xf0e6fa, 1);
+        renderer.setClearColor(0x000000, 0);  // 透明背景
 
         // 灯光
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
