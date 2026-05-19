@@ -1,11 +1,12 @@
 """
 统一模型管理器
-负责引擎预加载、模型切换、缓存管理
+负责引擎预加载、模型切换、缓存管理、错误回传
 """
 
 import os
 import time
 from enum import Enum
+from collections import deque
 
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer, QUrl
 from PyQt5.QtWebChannel import QWebChannel
@@ -17,18 +18,30 @@ class ModelType(Enum):
     LIVE2D = "live2d"
 
 
+class ModelState(Enum):
+    """模型状态枚举"""
+    IDLE = "idle"
+    LOADING = "loading"
+    LOADED = "loaded"
+    ERROR = "error"
+
+
 class ModelManager(QObject):
     """
     统一的模型管理器
     - 启动时预加载 VRM 和 Live2D 引擎
     - 切换模型时只加载模型，不重新初始化引擎
     - 支持模型缓存，重复切换无需重新加载
+    - 切换锁防止并发问题
+    - 错误状态回传
     """
 
     # 信号
-    model_switched = pyqtSignal(str)  # 模型切换完成
-    model_load_error = pyqtSignal(str, str)  # 模型加载失败 (model_path, error)
-    engine_ready = pyqtSignal(str)  # 引擎就绪 (engine_type)
+    model_switched = pyqtSignal(str)           # 模型切换完成 (model_path)
+    model_load_error = pyqtSignal(str, str)    # 模型加载失败 (model_path, error)
+    engine_ready = pyqtSignal(str)             # 引擎就绪 (engine_type)
+    engine_error = pyqtSignal(str, str)        # 引擎初始化失败 (engine_type, error)
+    state_changed = pyqtSignal(str, str)       # 状态变化 (state, detail)
 
     def __init__(self, web_view, parent=None):
         super().__init__(parent)
@@ -39,13 +52,26 @@ class ModelManager(QObject):
             ModelType.VRM: False,
             ModelType.LIVE2D: False
         }
-        self.is_switching = False  # 切换锁
+
+        # 状态管理
+        self.state = ModelState.IDLE
+        self.is_switching = False
         self.load_start_time = None
+        self.pending_switch = None  # 等待中的切换请求
+
+        # 命令队列
+        self._command_queue = deque()
+        self._processing_command = False
 
         # 超时定时器
         self.load_timeout_timer = QTimer()
         self.load_timeout_timer.setSingleShot(True)
         self.load_timeout_timer.timeout.connect(self._on_load_timeout)
+
+        # 就绪检查定时器
+        self._ready_check_timer = QTimer()
+        self._ready_check_timer.setSingleShot(True)
+        self._ready_check_timer.timeout.connect(self._check_ready_timeout)
 
         # 设置 WebChannel
         self._setup_bridge()
@@ -65,59 +91,137 @@ class ModelManager(QObject):
         """预加载所有引擎"""
         renderer_path = self.get_renderer_path()
         if not os.path.exists(renderer_path):
-            print(f"[ModelManager] Renderer not found: {renderer_path}")
+            error_msg = f"Renderer not found: {renderer_path}"
+            print(f"[ModelManager] {error_msg}")
+            self.engine_error.emit("all", error_msg)
             return False
 
         print(f"[ModelManager] Loading renderer: {renderer_path}")
+        self._set_state("loading", "Loading renderer page...")
+
+        # 断开旧连接
+        try:
+            self.web_view.loadFinished.disconnect()
+        except TypeError:
+            pass
+
         self.web_view.loadFinished.connect(self._on_page_loaded)
         self.web_view.load(QUrl.fromLocalFile(renderer_path))
+
+        # 启动就绪检查超时（15 秒）
+        self._ready_check_timer.start(15000)
+
         return True
 
     def _on_page_loaded(self, success):
         """页面加载完成后初始化引擎"""
+        print(f"[ModelManager] _on_page_loaded: success={success}", flush=True)
         if not success:
-            print("[ModelManager] Page load failed")
+            error_msg = "Renderer page load failed"
+            print(f"[ModelManager] {error_msg}", flush=True)
+            self._set_state("error", error_msg)
+            self.engine_error.emit("all", error_msg)
             return
 
-        print("[ModelManager] Page loaded, initializing engines...")
+        print("[ModelManager] Page loaded, waiting for JS init...", flush=True)
+        self._set_state("loading", "Waiting for JS initialization...")
 
-        # 异步初始化两个引擎
+        # 延迟初始化引擎，等待 JS 端 QWebChannel 初始化完成
+        QTimer.singleShot(1000, self._start_engine_init)
+
+    def _start_engine_init(self):
+        """开始初始化引擎（延迟调用）"""
+        print("[ModelManager] Starting engine initialization...", flush=True)
+        self._set_state("loading", "Initializing engines...")
+
+        # 先检查 JS 端是否就绪
+        check_js = """
+        (function() {
+            return {
+                modelManagerExists: !!window.modelManager,
+                rendererExists: !!window.renderer,
+                initEngineExists: !!window.initEngine
+            };
+        })()
+        """
+        self.web_view.page().runJavaScript(check_js, self._on_js_ready_check)
+
+    def _on_js_ready_check(self, result):
+        """JS 端就绪检查回调"""
+        print(f"[ModelManager] JS ready check: {result}", flush=True)
+
+        if not result or not result.get('modelManagerExists'):
+            print("[ModelManager] Warning: modelManager not ready, retrying in 1s...", flush=True)
+            QTimer.singleShot(1000, self._start_engine_init)
+            return
+
+        # JS 端就绪，开始初始化引擎
+        print("[ModelManager] JS ready, initializing engines...", flush=True)
         self._init_engine(ModelType.VRM)
         self._init_engine(ModelType.LIVE2D)
 
     def _init_engine(self, engine_type):
         """初始化指定引擎"""
+        print(f"[ModelManager] _init_engine: {engine_type.value}", flush=True)
+
+        # 使用回调方式处理异步函数，避免 Qt 不支持 async 返回值的问题
         js_code = f"""
-        (async function() {{
-            try {{
-                const result = await window.initEngine('{engine_type.value}');
-                return result;
-            }} catch(e) {{
-                return {{ success: false, error: e.message }};
-            }}
+        (function() {{
+            console.log('[JS] Initializing {engine_type.value} engine...');
+            window.initEngine('{engine_type.value}').then(function(result) {{
+                console.log('[JS] {engine_type.value} result:', JSON.stringify(result));
+                // 通过 QWebChannel 回传结果
+                if (window.modelManager) {{
+                    window.modelManager.onEngineReady('{engine_type.value}');
+                }}
+            }}).catch(function(error) {{
+                console.error('[JS] {engine_type.value} error:', error.message);
+                if (window.modelManager) {{
+                    window.modelManager.onEngineError('{engine_type.value}', error.message);
+                }}
+            }});
+            return true;
         }})()
         """
-        self.web_view.page().runJavaScript(
-            js_code,
-            lambda result: self._on_engine_ready(engine_type, result)
-        )
+        print(f"[ModelManager] Running JS for {engine_type.value}...", flush=True)
+        self.web_view.page().runJavaScript(js_code)
 
     def _on_engine_ready(self, engine_type, result):
         """引擎初始化完成回调"""
+        print(f"[ModelManager] _on_engine_ready: {engine_type.value} - {result}", flush=True)
         if result and result.get('success'):
             self.engines_ready[engine_type] = True
             self.engine_ready.emit(engine_type.value)
-            print(f"[ModelManager] {engine_type.value} engine ready")
+            print(f"[ModelManager] {engine_type.value} engine ready", flush=True)
+
+            # 检查是否所有引擎都就绪
+            if all(self.engines_ready.values()):
+                self._ready_check_timer.stop()
+                self._set_state("ready", "All engines ready")
+                self._process_next_command()
         else:
             error = result.get('error', 'Unknown error') if result else 'No result'
-            print(f"[ModelManager] {engine_type.value} engine failed: {error}")
+            print(f"[ModelManager] {engine_type.value} engine failed: {error}", flush=True)
+            self.engine_error.emit(engine_type.value, error)
+
+    def _check_ready_timeout(self):
+        """引擎初始化超时"""
+        not_ready = [t.value for t, ready in self.engines_ready.items() if not ready]
+        error_msg = f"Engine init timeout: {', '.join(not_ready)}"
+        print(f"[ModelManager] {error_msg}")
+        self._set_state("error", error_msg)
+
+        # 标记未就绪的引擎为错误
+        for engine_type, ready in self.engines_ready.items():
+            if not ready:
+                self.engine_error.emit(engine_type.value, "Init timeout")
 
     def switch_model(self, model_path, model_type):
         """
-        切换模型
+        切换模型（带队列和锁）
 
         Args:
-            model_path: 模型文件路径（相对于 index.html）
+            model_path: 模型文件路径
             model_type: 模型类型 ('vrm' 或 'live2d')
         """
         # 解析类型
@@ -125,54 +229,73 @@ class ModelManager(QObject):
             try:
                 model_type = ModelType(model_type)
             except ValueError:
-                print(f"[ModelManager] Invalid model type: {model_type}")
+                error_msg = f"Invalid model type: {model_type}"
+                print(f"[ModelManager] {error_msg}")
+                self.model_load_error.emit(model_path, error_msg)
                 return False
 
-        # 检查切换锁
+        # 如果正在切换，加入队列
         if self.is_switching:
-            print("[ModelManager] Switch in progress, skipping")
-            return False
+            print(f"[ModelManager] Switch in progress, queuing: {model_path}")
+            self._command_queue.clear()  # 清空旧队列，只保留最新请求
+            self._command_queue.append((model_path, model_type))
+            return True
 
         # 检查引擎是否就绪
         if not self.engines_ready.get(model_type):
-            print(f"[ModelManager] {model_type.value} engine not ready, waiting...")
-            self.engine_ready.connect(
-                lambda: self._do_switch(model_path, model_type)
-            )
+            print(f"[ModelManager] {model_type.value} engine not ready, queuing...")
+            self._command_queue.append((model_path, model_type))
             return True
 
-        return self._do_switch(model_path, model_type)
+        return self._execute_switch(model_path, model_type)
 
-    def _do_switch(self, model_path, model_type):
+    def _execute_switch(self, model_path, model_type):
         """执行模型切换"""
         self.is_switching = True
         self.load_start_time = time.time()
+        self._set_state("loading", f"Loading {model_type.value}: {os.path.basename(model_path)}")
 
         # 启动超时检测
-        self.load_timeout_timer.start(10000)  # 10 秒超时
+        self.load_timeout_timer.start(15000)  # 15 秒超时
 
-        # 转换路径为绝对路径（相对于 renderer.html）
+        # 转换路径为绝对路径
         abs_model_path = self._resolve_model_path(model_path)
 
         print(f"[ModelManager] Switching to {model_type.value}: {abs_model_path}")
 
-        # 调用 JS 加载模型
+        # 使用回调方式处理异步函数
         js_code = f"""
-        (async function() {{
-            try {{
-                const result = await window.loadModel('{model_type.value}', '{abs_model_path}');
-                return result;
-            }} catch(e) {{
-                return {{ success: false, error: e.message }};
-            }}
+        (function() {{
+            console.log('[JS] Loading {model_type.value} model: {abs_model_path}');
+            window.loadModel('{model_type.value}', '{abs_model_path}').then(function(result) {{
+                console.log('[JS] Load result:', JSON.stringify(result));
+                if (window.modelManager) {{
+                    if (result && result.success) {{
+                        window.modelManager.onModelLoaded('{model_path}', '{model_type.value}');
+                    }} else {{
+                        window.modelManager.onModelLoadError('{model_path}', '{model_type.value}', result ? result.error : 'Unknown error');
+                    }}
+                }}
+            }}).catch(function(error) {{
+                console.error('[JS] Load error:', error.message);
+                if (window.modelManager) {{
+                    window.modelManager.onModelLoadError('{model_path}', '{model_type.value}', error.message);
+                }}
+            }});
+            return true;
         }})()
         """
-        self.web_view.page().runJavaScript(
-            js_code,
-            lambda result: self._on_model_loaded(model_path, model_type, result)
-        )
+        self.web_view.page().runJavaScript(js_code)
 
         return True
+
+    def _process_next_command(self):
+        """处理队列中的下一个命令"""
+        print(f"[ModelManager] _process_next_command: queue_size={len(self._command_queue)}", flush=True)
+        if self._command_queue:
+            model_path, model_type = self._command_queue.popleft()
+            print(f"[ModelManager] Processing queued command: {model_path}", flush=True)
+            self._execute_switch(model_path, model_type)
 
     def _resolve_model_path(self, model_path):
         """将路径转换为 file:/// URL 格式"""
@@ -196,10 +319,8 @@ class ModelManager(QObject):
 
         # 将 Windows 路径转换为 file:/// URL
         if os.path.isabs(model_path):
-            # 将反斜杠替换为正斜杠，并添加 file:/// 前缀
             url_path = model_path.replace('\\', '/')
             if url_path.startswith('C:'):
-                # Windows 驱动器路径
                 url_path = '/' + url_path
             return f'file:///{url_path}'
 
@@ -218,58 +339,111 @@ class ModelManager(QObject):
             self.current_type = model_type
 
             print(f"[ModelManager] Model loaded in {load_time:.3f}s (cache: {from_cache})")
+            self._set_state("loaded", f"Loaded: {os.path.basename(model_path)}")
             self.model_switched.emit(model_path)
         else:
             error = result.get('error', 'Unknown error') if result else 'No result'
             print(f"[ModelManager] Model load failed: {error}")
+            self._set_state("error", f"Load failed: {error}")
             self.model_load_error.emit(model_path, error)
+
+        # 处理队列中的下一个命令
+        self._process_next_command()
 
     def _on_load_timeout(self):
         """加载超时处理"""
         self.is_switching = False
-        print("[ModelManager] Model load timeout")
+        error_msg = "Load timeout (15s)"
+        print(f"[ModelManager] {error_msg}")
+        self._set_state("error", error_msg)
         self.model_load_error.emit(
             self.current_model or "unknown",
-            "Load timeout (10s)"
+            error_msg
         )
+
+        # 处理队列中的下一个命令
+        self._process_next_command()
+
+    def _set_state(self, state, detail=""):
+        """设置状态并发射信号"""
+        self.state = state
+        self.state_changed.emit(state, detail)
+        print(f"[ModelManager] State: {state} - {detail}")
+
+    # ========== JS 回调接口 ==========
 
     @pyqtSlot(str, str)
     def onModelLoaded(self, model_path, model_type):
-        """JS 端模型加载完成回调"""
+        """JS 端模型加载完成回调（备用）"""
         self._on_model_loaded(model_path, model_type, {'success': True})
 
     @pyqtSlot(str, str, str)
     def onModelLoadError(self, model_path, model_type, error):
-        """JS 端模型加载失败回调"""
+        """JS 端模型加载失败回调（备用）"""
         self._on_model_loaded(model_path, model_type, {'success': False, 'error': error})
+
+    @pyqtSlot(str)
+    def onEngineReady(self, engine_type):
+        """JS 端引擎就绪回调"""
+        print(f"[ModelManager] onEngineReady called: {engine_type}", flush=True)
+        try:
+            et = ModelType(engine_type)
+            self._on_engine_ready(et, {'success': True})
+        except ValueError:
+            print(f"[ModelManager] Unknown engine type: {engine_type}", flush=True)
+
+    @pyqtSlot(str, str)
+    def onEngineError(self, engine_type, error):
+        """JS 端引擎错误回调"""
+        print(f"[ModelManager] onEngineError called: {engine_type} - {error}", flush=True)
+
+    # ========== 管理接口 ==========
 
     def get_cache_stats(self):
         """获取缓存统计"""
-        js_code = "window.getCacheStats();"
+        js_code = "window.getCacheStats ? window.getCacheStats() : null;"
         return self.web_view.page().runJavaScript(js_code)
 
     def get_performance_report(self):
         """获取性能报告"""
-        js_code = "window.getPerformanceReport();"
+        js_code = "window.getPerformanceReport ? window.getPerformanceReport() : null;"
         return self.web_view.page().runJavaScript(js_code)
 
     def clear_cache(self):
         """清空模型缓存"""
-        js_code = "window.clearCache();"
+        js_code = "if (window.clearCache) window.clearCache();"
         self.web_view.page().runJavaScript(js_code)
         print("[ModelManager] Cache cleared")
 
     def set_cache_config(self, max_models=5):
         """设置缓存配置"""
         js_code = f"""
-        window.renderer.modelCache.maxSize = {max_models};
+        if (window.renderer && window.renderer.modelCache) {{
+            window.renderer.modelCache.maxSize = {max_models};
+        }}
         """
         self.web_view.page().runJavaScript(js_code)
         print(f"[ModelManager] Cache max size set to {max_models}")
 
+    def get_state(self):
+        """获取当前状态"""
+        return {
+            'state': self.state,
+            'current_model': self.current_model,
+            'current_type': self.current_type.value if self.current_type else None,
+            'engines_ready': {t.value: r for t, r in self.engines_ready.items()},
+            'queue_size': len(self._command_queue),
+            'is_switching': self.is_switching
+        }
+
     def cleanup(self):
         """清理所有资源"""
         self.load_timeout_timer.stop()
-        js_code = "window.cleanup();"
+        self._ready_check_timer.stop()
+        self._command_queue.clear()
+
+        js_code = "if (window.cleanup) window.cleanup();"
         self.web_view.page().runJavaScript(js_code)
+
+        self._set_state("idle", "Cleaned up")
         print("[ModelManager] Cleanup complete")

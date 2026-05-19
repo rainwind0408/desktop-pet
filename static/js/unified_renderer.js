@@ -237,8 +237,8 @@ class UnifiedRenderer {
         const loader = new THREE.GLTFLoader();
 
         // 注册 VRM 插件
-        if (typeof THREEVRM !== 'undefined' && THREEVRM.VRMLoaderPlugin) {
-            loader.register(parser => new THREEVRM.VRMLoaderPlugin(parser));
+        if (typeof THREE_VRM !== 'undefined' && THREE_VRM.VRMLoaderPlugin) {
+            loader.register(parser => new THREE_VRM.VRMLoaderPlugin(parser));
         }
 
         this.engines.vrm = {
@@ -351,26 +351,47 @@ class UnifiedRenderer {
         if (vrm) {
             console.log('[Renderer] Using cached VRM model');
         } else {
-            // 加载新模型
+            // 加载新模型 - 使用 XMLHttpRequest 代替 fetch（兼容 file:/// 协议）
+            console.log('[Renderer] Loading VRM model:', modelPath);
+
             const gltf = await new Promise((resolve, reject) => {
-                engine.loader.load(
-                    modelPath,
-                    resolve,
-                    progress => {
-                        if (progress.total > 0) {
-                            const percent = Math.round((progress.loaded / progress.total) * 100);
-                            this._updateStatus(`Loading VRM: ${percent}%`);
-                        }
-                    },
-                    reject
-                );
+                // 使用 XMLHttpRequest 加载文件（兼容 file:/// 协议）
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', modelPath, true);
+                xhr.responseType = 'arraybuffer';
+
+                xhr.onprogress = (event) => {
+                    if (event.total > 0) {
+                        const percent = Math.round((event.loaded / event.total) * 100);
+                        this._updateStatus(`Loading VRM: ${percent}%`);
+                    }
+                };
+
+                xhr.onload = function() {
+                    if (xhr.status === 200 || xhr.status === 0) { // status 0 for file:///
+                        // 使用 GLTFLoader.parse 代替 load
+                        engine.loader.parse(xhr.response, '', function(gltf) {
+                            resolve(gltf);
+                        }, function(error) {
+                            reject(error);
+                        });
+                    } else {
+                        reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+                    }
+                };
+
+                xhr.onerror = function() {
+                    reject(new Error('Network error'));
+                };
+
+                xhr.send();
             });
 
             // 解析 VRM
             if (gltf.userData && gltf.userData.vrm) {
                 vrm = gltf.userData.vrm;
-            } else if (typeof THREEVRM !== 'undefined' && THREEVRM.VRM) {
-                vrm = await THREEVRM.VRM.from(gltf);
+            } else if (typeof THREE_VRM !== 'undefined' && THREE_VRM.VRM) {
+                vrm = await THREE_VRM.VRM.from(gltf);
             } else {
                 // 降级为普通 GLTF
                 vrm = { scene: gltf.scene, update: () => {} };

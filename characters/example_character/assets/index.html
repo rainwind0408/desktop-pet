@@ -145,7 +145,7 @@ html, body {
 document.getElementById('static-indicator').textContent = 'Scripts loaded - Checking SDK...';
 console.log('Page loaded, SDK check:', {
     THREE: typeof THREE !== 'undefined',
-    THREEVRM: typeof THREEVRM !== 'undefined',
+    THREE_VRM: typeof THREE_VRM !== 'undefined',
     GLTFLoader: typeof THREE !== 'undefined' && typeof THREE.GLTFLoader !== 'undefined',
     OrbitControls: typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined',
     PIXI: typeof PIXI !== 'undefined',
@@ -351,13 +351,13 @@ function startVRM() {
         var loader = new THREE.GLTFLoader();
 
         // 注册 VRM 插件
-        if (typeof THREEVRM !== 'undefined' && THREEVRM.VRMLoaderPlugin) {
+        if (typeof THREE_VRM !== 'undefined' && THREE_VRM.VRMLoaderPlugin) {
             loader.register(function(parser) {
-                return new THREEVRM.VRMLoaderPlugin(parser);
+                return new THREE_VRM.VRMLoaderPlugin(parser);
             });
             console.log('VRM plugin registered');
         } else {
-            console.warn('THREEVRM not available, loading as plain GLTF');
+            console.warn('THREE_VRM not available, loading as plain GLTF');
         }
 
         loader.load(
