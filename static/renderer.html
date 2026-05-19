@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Model Renderer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+#render-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+#render-container canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+#status-bar {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+    z-index: 10;
+}
+#debug-panel {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    font-size: 10px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.8);
+    padding: 4px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 10;
+    display: none;
+}
+</style>
+</head>
+<body>
+
+<div id="render-container"></div>
+<div id="status-bar">Loading SDK...</div>
+<div id="debug-panel"></div>
+
+<!-- Live2D SDK (本地) -->
+<script src="sdk/pixi.min.js"></script>
+<script src="sdk/cubism4.min.js"></script>
+<script src="sdk/pixi-live2d-display.min.js"></script>
+<script src="sdk/live2dcubismcore.min.js"></script>
+
+<!-- Three.js + VRM SDK (本地) -->
+<script src="sdk/three.min.js"></script>
+<script src="sdk/GLTFLoader.js"></script>
+<script src="sdk/OrbitControls.js"></script>
+<script src="sdk/three-vrm.min.js"></script>
+
+<!-- WebChannel 通信桥 -->
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+<!-- 统一渲染器 -->
+<script src="js/unified_renderer.js"></script>
+
+<script>
+// 初始化 WebChannel 通信
+function initBridge() {
+    if (typeof QWebChannel !== 'undefined') {
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            window.modelManager = channel.objects.modelManager;
+            console.log('[Renderer] Bridge initialized');
+        });
+    } else {
+        console.log('[Renderer] QWebChannel not available, running standalone');
+    }
+}
+
+// 检查 SDK 加载状态
+function checkSDK() {
+    const status = {
+        THREE: typeof THREE !== 'undefined',
+        THREEVRM: typeof THREEVRM !== 'undefined',
+        GLTFLoader: typeof THREE !== 'undefined' && typeof THREE.GLTFLoader !== 'undefined',
+        OrbitControls: typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined',
+        PIXI: typeof PIXI !== 'undefined',
+        Live2DModel: typeof PIXI !== 'undefined' && typeof PIXI.live2d !== 'undefined' && typeof PIXI.live2d.Live2DModel !== 'undefined'
+    };
+
+    console.log('[Renderer] SDK status:', status);
+
+    const allLoaded = Object.values(status).every(v => v);
+    const statusBar = document.getElementById('status-bar');
+
+    if (allLoaded) {
+        statusBar.textContent = 'SDK Ready';
+        window.renderer.isInitialized = true;
+    } else {
+        const missing = Object.entries(status)
+            .filter(([k, v]) => !v)
+            .map(([k]) => k)
+            .join(', ');
+        statusBar.textContent = 'SDK Missing: ' + missing;
+        console.warn('[Renderer] Missing SDK:', missing);
+    }
+
+    return status;
+}
+
+// 页面加载完成后初始化
+window.onload = function() {
+    console.log('[Renderer] Page loaded');
+    initBridge();
+    checkSDK();
+};
+
+// 调试面板更新
+function updateDebugPanel() {
+    const panel = document.getElementById('debug-panel');
+    if (!panel || panel.style.display === 'none') return;
+
+    const report = window.renderer.getPerformanceReport();
+    const cache = window.renderer.getCacheStats();
+
+    panel.innerHTML = `
+        Cache: ${cache.size}/${cache.maxSize} |
+        Hit Rate: ${report.cacheHitRate} |
+        Engine: ${window.renderer.currentEngineType || 'none'}
+    `;
+}
+
+// 定期更新调试面板
+setInterval(updateDebugPanel, 1000);
+</script>
+
+</body>
+</html>

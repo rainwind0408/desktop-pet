@@ -5,9 +5,17 @@
 
 from .pet_window import PetWindow
 from .model_widget import ModelWidget
+from .model_manager import ModelManager, ModelType
 from .live2d_bridge import Live2DBridge
 
 # 向后兼容
 Live2DWidget = ModelWidget
 
-__all__ = ['PetWindow', 'ModelWidget', 'Live2DWidget', 'Live2DBridge']
+__all__ = [
+    'PetWindow',
+    'ModelWidget',
+    'ModelManager',
+    'ModelType',
+    'Live2DWidget',
+    'Live2DBridge'
+]

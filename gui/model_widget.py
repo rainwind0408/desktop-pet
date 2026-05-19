@@ -2,6 +2,8 @@
 3D 模型渲染组件
 支持 Live2D 和 VRM 两种模型格式
 通过 QWebEngineView 嵌入渲染网页
+
+优化版本：使用 ModelManager 实现引擎预加载和模型缓存
 """
 
 import os
@@ -12,6 +14,7 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
 from .live2d_bridge import Live2DBridge
+from .model_manager import ModelManager, ModelType
 
 
 CHARACTERS_DIR = os.path.abspath(
@@ -33,8 +36,13 @@ class ModelWidget(QWidget):
         self._bridge = Live2DBridge(self)
         self._use_fallback = False
         self._model_type = "live2d"  # 'live2d' | 'vrm'
+
+        # 使用新的 ModelManager
+        self._model_manager = None
+
         self._init_ui()
         self._connect_bridge()
+        self._init_model_manager()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -54,9 +62,6 @@ class ModelWidget(QWidget):
         self._fallback_label.hide()
 
         self._web_view = QWebEngineView(self)
-        self._web_view.setAttribute(Qt.WA_TranslucentBackground)
-        self._web_view.page().setBackgroundColor(Qt.transparent)
-        self._web_view.setStyleSheet("background: transparent;")
 
         layout.addWidget(self._web_view)
         layout.addWidget(self._fallback_label)
@@ -67,6 +72,36 @@ class ModelWidget(QWidget):
         self._bridge.motion_started.connect(self._on_motion_started)
         self._bridge.motion_finished.connect(self._on_motion_finished)
 
+    def _init_model_manager(self):
+        """初始化模型管理器"""
+        self._model_manager = ModelManager(self._web_view, self)
+
+        # 连接信号
+        self._model_manager.model_switched.connect(self._on_model_switched)
+        self._model_manager.model_load_error.connect(self._on_model_load_error)
+        self._model_manager.engine_ready.connect(self._on_engine_ready)
+
+        # 预加载引擎
+        print("[ModelWidget] Preloading engines...")
+        self._model_manager.preload_engines()
+
+    def _on_model_switched(self, model_path):
+        """模型切换完成"""
+        print(f"[ModelWidget] Model switched: {model_path}")
+        self._use_fallback = False
+        self._fallback_label.hide()
+        self._web_view.show()
+        self.model_ready.emit(self._character_id or model_path)
+
+    def _on_model_load_error(self, model_path, error):
+        """模型加载失败"""
+        print(f"[ModelWidget] Model load error: {error}")
+        self._show_fallback(f"模型加载失败\n{error}")
+
+    def _on_engine_ready(self, engine_type):
+        """引擎就绪"""
+        print(f"[ModelWidget] Engine ready: {engine_type}")
+
     def load_character(self, character_id, profile=None):
         self._character_id = character_id
         self._profile = profile
@@ -75,74 +110,46 @@ class ModelWidget(QWidget):
         appearance = profile.get("appearance", {}) if profile else {}
         self._model_type = appearance.get("styleType", "live2d")
 
-        template_path = self._find_template(character_id)
-        if template_path and os.path.exists(template_path):
-            self._bridge.create_channel(self._web_view)
-            # 断开旧的连接，避免重复
-            try:
-                self._web_view.loadFinished.disconnect()
-            except TypeError:
-                pass
-            # 连接 loadFinished 信号，注入角色配置
-            self._web_view.loadFinished.connect(self._on_page_loaded)
-            url = QUrl.fromLocalFile(os.path.abspath(template_path))
-            self._web_view.load(url)
+        # 获取模型路径
+        model_path = appearance.get("modelPath", "")
+
+        print(f"[ModelWidget] load_character: {character_id}", flush=True)
+        print(f"[ModelWidget] styleType: {self._model_type}", flush=True)
+        print(f"[ModelWidget] modelPath: {model_path}", flush=True)
+
+        if not model_path:
+            name = profile.get("name", character_id) if profile else character_id
+            self._show_fallback(f"角色\n{name}\n等待模型文件...")
+            self.fallback_visible.emit(True)
+            return
+
+        # 转换路径
+        if model_path.startswith("assets/"):
+            model_path = model_path[len("assets/"):]
+
+        # 构建完整模型路径
+        full_model_path = os.path.join(
+            CHARACTERS_DIR, character_id, "assets", model_path
+        )
+
+        if not os.path.exists(full_model_path):
+            print(f"[ModelWidget] Model file not found: {full_model_path}")
+            name = profile.get("name", character_id) if profile else character_id
+            self._show_fallback(f"角色\n{name}\n模型文件不存在...")
+            self.fallback_visible.emit(True)
+            return
+
+        # 使用 ModelManager 加载模型
+        abs_model_path = os.path.abspath(full_model_path)
+        print(f"[ModelWidget] Switching to model: {abs_model_path}")
+
+        success = self._model_manager.switch_model(abs_model_path, self._model_type)
+        if success:
             self._web_view.show()
             self._fallback_label.hide()
             self._use_fallback = False
         else:
-            name = profile.get("name", character_id) if profile else character_id
-            self._show_fallback(f"角色\n{name}\n等待模型文件...")
-            self.fallback_visible.emit(True)
-
-    def _on_page_loaded(self, ok):
-        """页面加载完成后注入角色配置"""
-        if not ok or not self._profile:
-            return
-
-        appearance = self._profile.get("appearance", {})
-        name = self._profile.get("name", self._character_id)
-        model_path = appearance.get("modelPath", "model/model.model3.json")
-        style_type = appearance.get("styleType", "live2d")
-        avatar = self._profile.get("preferences", {}).get("avatar", "🎀")
-
-        # 将 modelPath 转换为相对于 index.html 的路径
-        # index.html 在 characters/{id}/assets/，模型在 characters/{id}/assets/model/
-        # 所以 modelPath 应该是 "model/character.vrm" 这样的相对路径
-        if model_path.startswith("assets/"):
-            model_path = model_path[len("assets/"):]
-
-        # 构建 JSON 配置
-        import json
-        config_json = json.dumps({
-            "name": name,
-            "avatar": avatar,
-            "modelPath": model_path,
-            "styleType": style_type,
-            "scale": 1.0
-        }, ensure_ascii=False)
-
-        # 注入配置并调用 updateConfig
-        js = f"""
-        try {{
-            window._configInjected = true;
-            updateConfig({config_json});
-        }} catch(e) {{
-            console.error('Config injection error:', e);
-        }}
-        """
-        self._web_view.page().runJavaScript(js)
-
-    def _find_template(self, character_id):
-        candidates = [
-            os.path.join(CHARACTERS_DIR, character_id, "assets", "index.html"),
-            os.path.join(CHARACTERS_DIR, character_id, "assets", "model", "index.html"),
-            os.path.join(CHARACTERS_DIR, character_id, "index.html"),
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return None
+            self._show_fallback("模型切换失败")
 
     def _show_fallback(self, text):
         self._fallback_label.setText(text)
@@ -154,48 +161,119 @@ class ModelWidget(QWidget):
     def play_motion(self, motion_name, group=""):
         if self._use_fallback:
             return
-        js = f"playMotion('{motion_name}', '{group}')"
+        # 通过 JS 接口播放动作
+        js = f"""
+        (function() {{
+            if (window.renderer && window.renderer.currentEngineType === 'vrm') {{
+                const engine = window.renderer.engines.vrm;
+                if (engine && engine.currentModel) {{
+                    // VRM 表情
+                    if (engine.currentModel.expressionManager) {{
+                        const expressionMap = {{
+                            'happy': 'happy',
+                            'joy': 'happy',
+                            'surprised': 'surprised',
+                            'sad': 'sad',
+                            'upset': 'angry'
+                        }};
+                        const expression = expressionMap['{motion_name}'];
+                        if (expression) {{
+                            engine.currentModel.expressionManager.setValue(expression, 1.0);
+                            setTimeout(() => {{
+                                engine.currentModel.expressionManager.setValue(expression, 0);
+                            }}, 1500);
+                        }}
+                    }}
+                }}
+            }} else if (window.renderer && window.renderer.currentEngineType === 'live2d') {{
+                const engine = window.renderer.engines.live2d;
+                if (engine && engine.currentModel) {{
+                    try {{
+                        engine.currentModel.motion('{group || 'TapBody'}');
+                    }} catch(e) {{
+                        console.log('Live2D motion error:', e.message);
+                    }}
+                }}
+            }}
+        }})()
+        """
         self._web_view.page().runJavaScript(js)
 
     def set_expression(self, expression_name):
         if self._use_fallback:
             return
-        js = f"setExpression('{expression_name}')"
+        js = f"""
+        (function() {{
+            if (window.renderer && window.renderer.engines.vrm) {{
+                const engine = window.renderer.engines.vrm;
+                if (engine && engine.currentModel && engine.currentModel.expressionManager) {{
+                    engine.currentModel.expressionManager.setValue('{expression_name}', 1.0);
+                    setTimeout(() => {{
+                        engine.currentModel.expressionManager.setValue('{expression_name}', 0);
+                    }}, 1500);
+                }}
+            }}
+        }})()
+        """
         self._web_view.page().runJavaScript(js)
 
     def set_random_motion(self):
         if self._use_fallback:
             return
-        self._web_view.page().runJavaScript("playRandomMotion()")
+        self.play_motion('idle')
 
     def mouse_follow(self, x, y):
         if self._use_fallback:
             return
-        js = f"setMouseFollow({x}, {y})"
+        js = f"""
+        (function() {{
+            if (window.renderer && window.renderer.engines.vrm) {{
+                const engine = window.renderer.engines.vrm;
+                if (engine && engine.currentModel && engine.currentModel.lookAt) {{
+                    const targetX = ({x} / window.innerWidth - 0.5) * 2;
+                    const targetY = ({y} / window.innerHeight - 0.5) * 2;
+                    engine.currentModel.lookAt.target.position.set(targetX * 0.5, targetY * 0.5 + 1.3, 2);
+                }}
+            }}
+        }})()
+        """
         self._web_view.page().runJavaScript(js)
 
     def start_idle_timer(self, interval_ms=5000):
         if self._use_fallback:
             return
-        js = f"startIdleTimer({interval_ms})"
-        self._web_view.page().runJavaScript(js)
+        # 由 JS 端管理空闲定时器
+        pass
 
     def stop_idle_timer(self):
         if self._use_fallback:
             return
-        self._web_view.page().runJavaScript("stopIdleTimer()")
+        # 由 JS 端管理空闲定时器
+        pass
 
     def set_scale(self, factor):
         if self._use_fallback:
             return
-        js = f"setModelScale({factor})"
+        js = f"""
+        (function() {{
+            if (window.renderer) {{
+                if (window.renderer.engines.vrm && window.renderer.engines.vrm.currentModel) {{
+                    window.renderer.engines.vrm.currentModel.scene.scale.set({factor}, {factor}, {factor});
+                }}
+                if (window.renderer.engines.live2d && window.renderer.engines.live2d.currentModel) {{
+                    window.renderer.engines.live2d.currentModel.scale.set({factor});
+                }}
+            }}
+        }})()
+        """
         self._web_view.page().runJavaScript(js)
 
     def _on_model_loaded(self, model_name):
+        """兼容旧版 Live2DBridge 回调"""
         self.model_ready.emit(model_name)
-        self.start_idle_timer()
 
     def _on_model_error(self, error_msg):
+        """兼容旧版 Live2DBridge 回调"""
         self._show_fallback(f"模型加载失败\n{error_msg}")
 
     def _on_motion_started(self, group, name):
@@ -203,6 +281,28 @@ class ModelWidget(QWidget):
 
     def _on_motion_finished(self, group, name):
         self.motion_played.emit(name)
+
+    def get_cache_stats(self):
+        """获取缓存统计"""
+        if self._model_manager:
+            return self._model_manager.get_cache_stats()
+        return None
+
+    def get_performance_report(self):
+        """获取性能报告"""
+        if self._model_manager:
+            return self._model_manager.get_performance_report()
+        return None
+
+    def clear_cache(self):
+        """清空缓存"""
+        if self._model_manager:
+            self._model_manager.clear_cache()
+
+    def cleanup(self):
+        """清理资源"""
+        if self._model_manager:
+            self._model_manager.cleanup()
 
 
 # 保持向后兼容

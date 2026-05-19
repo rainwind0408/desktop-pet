@@ -5,29 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>3D Model Viewer</title>
 
-<!-- Live2D SDK -->
-<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/index.min.js"></script>
-<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<!-- Live2D SDK (本地) -->
+<script src="../../../static/sdk/pixi.min.js"></script>
+<script src="../../../static/sdk/cubism4.min.js"></script>
+<script src="../../../static/sdk/pixi-live2d-display.min.js"></script>
+<script src="../../../static/sdk/live2dcubismcore.min.js"></script>
 
-<!-- Three.js + VRM SDK (降级到兼容版本: three@0.146.0 + three-vrm@1.0.6) -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/GLTFLoader.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@1.0.6/lib/three-vrm.min.js"></script>
+<!-- Three.js + VRM SDK (本地, 兼容版本: three@0.146.0 + three-vrm@1.0.6) -->
+<script src="../../../static/sdk/three.min.js"></script>
+<script src="../../../static/sdk/GLTFLoader.js"></script>
+<script src="../../../static/sdk/OrbitControls.js"></script>
+<script src="../../../static/sdk/three-vrm.min.js"></script>
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
     width: 100%; height: 100%;
     overflow: hidden;
-    background: transparent;
+    background: #f0e6fa;
 }
 #model-canvas {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
+    display: block;
 }
 #fallback-view {
     position: absolute;
@@ -39,15 +40,16 @@ html, body {
     flex-direction: column;
     font-family: "Microsoft YaHei", sans-serif;
     color: #555;
+    background: #f0e6fa;
 }
 #fallback-avatar {
-    width: 160px; height: 160px;
+    width: 120px; height: 120px;
     border-radius: 50%;
     background: linear-gradient(135deg, #fce4ec 0%, #e8eaf6 50%, #e0f2f1 100%);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 80px;
+    font-size: 60px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.1);
     animation: float 3s ease-in-out infinite, pulse 2s ease-in-out infinite;
     cursor: pointer;
@@ -62,28 +64,45 @@ html, body {
     50% { transform: scale(1.05); }
 }
 #fallback-name {
-    margin-top: 16px;
-    font-size: 18px;
+    margin-top: 12px;
+    font-size: 16px;
     font-weight: bold;
     color: #444;
-    animation: fadeInOut 4s ease-in-out infinite;
-}
-@keyframes fadeInOut {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
 }
 #status-bar {
     position: absolute;
-    bottom: 8px;
+    bottom: 4px;
     left: 50%;
     transform: translateX(-50%);
     font-size: 10px;
-    color: rgba(0,0,0,0.3);
+    color: rgba(0,0,0,0.4);
     pointer-events: none;
+    z-index: 10;
 }
+#debug-console {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    right: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 9px;
+    font-family: Consolas, monospace;
+    color: #333;
+    background: rgba(255,255,255,0.85);
+    border-radius: 4px;
+    padding: 4px 6px;
+    z-index: 20;
+    pointer-events: none;
+    line-height: 1.4;
+}
+#debug-console .err { color: #c00; }
+#debug-console .info { color: #06a; }
 </style>
 </head>
 <body>
+
+<div id="static-indicator" style="position:absolute;top:0;left:0;right:0;height:30px;background:#7c3aed;color:white;font-size:11px;text-align:center;line-height:30px;z-index:100;">HTML Loaded - Waiting for scripts...</div>
 
 <canvas id="model-canvas"></canvas>
 
@@ -93,24 +112,62 @@ html, body {
 </div>
 
 <div id="status-bar">Ready</div>
+<div id="debug-console"></div>
 
 <script>
+// ========== 调试控制台 ==========
+(function() {
+    var dc = document.getElementById('debug-console');
+    function addLog(type, args) {
+        var line = document.createElement('div');
+        line.className = type;
+        var text = Array.prototype.slice.call(args).map(function(a) {
+            if (typeof a === 'object') {
+                try { return JSON.stringify(a); } catch(e) { return String(a); }
+            }
+            return String(a);
+        }).join(' ');
+        line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + text;
+        dc.appendChild(line);
+        dc.scrollTop = dc.scrollHeight;
+    }
+    var origLog = console.log;
+    var origErr = console.error;
+    var origWarn = console.warn;
+    console.log = function() { origLog.apply(console, arguments); addLog('info', arguments); };
+    console.error = function() { origErr.apply(console, arguments); addLog('err', arguments); };
+    console.warn = function() { origWarn.apply(console, arguments); addLog('err', arguments); };
+    window.onerror = function(msg, url, line, col, err) {
+        addLog('err', ['JS Error: ' + msg + ' (line ' + line + ')']);
+    };
+})();
+
+document.getElementById('static-indicator').textContent = 'Scripts loaded - Checking SDK...';
+console.log('Page loaded, SDK check:', {
+    THREE: typeof THREE !== 'undefined',
+    THREEVRM: typeof THREEVRM !== 'undefined',
+    GLTFLoader: typeof THREE !== 'undefined' && typeof THREE.GLTFLoader !== 'undefined',
+    OrbitControls: typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined',
+    PIXI: typeof PIXI !== 'undefined',
+    Live2DModel: typeof Live2DModel !== 'undefined'
+});
+
 // ========== 全局变量 ==========
 var _bridge = null;
 var _characterConfig = {
-    name: '桌面宠物',
-    avatar: '🎀',
+    name: '\u684c\u9762\u5ba0\u7269',
+    avatar: '\ud83c\udf80',
     modelPath: 'model/model.model3.json',
-    styleType: 'live2d',  // 'live2d' | 'vrm'
+    styleType: 'live2d',
     scale: 1.0
 };
 var _modelScale = 1.0;
 var _idleInterval = null;
 var _idleMs = 5000;
 var _currentMotion = null;
-var _emojis = ['🎀', '🌸', '✨', '💖', '🌟', '🐱', '🎵', '🍀', '💫', '🦋'];
+var _emojis = ['\ud83c\udf80', '\ud83c\udf38', '\u2728', '\ud83d\udc96', '\ud83c\udf1f', '\ud83d\udc31', '\ud83c\udfb5', '\ud83c\udf40', '\ud83d\udcab', '\ud83e\udd8b'];
 
-// Three.js 相关
+// Three.js
 var _threeScene = null;
 var _threeCamera = null;
 var _threeRenderer = null;
@@ -118,7 +175,7 @@ var _threeModel = null;
 var _threeClock = null;
 var _threeAnimationId = null;
 
-// Live2D 相关
+// Live2D
 var _pixiApp = null;
 var _live2dModel = null;
 
@@ -142,6 +199,17 @@ function loadConfig(callback) {
     callback(_characterConfig);
 }
 
+// ========== 获取 canvas 实际尺寸 ==========
+function getCanvasSize() {
+    var canvas = document.getElementById('model-canvas');
+    var w = canvas.clientWidth || canvas.offsetWidth || window.innerWidth;
+    var h = canvas.clientHeight || canvas.offsetHeight || window.innerHeight;
+    // 最小尺寸保护
+    if (w < 10) w = 320;
+    if (h < 10) h = 380;
+    return { width: w, height: h };
+}
+
 // ========== Fallback 模式 ==========
 function initFallback() {
     var canvas = document.getElementById('model-canvas');
@@ -150,6 +218,7 @@ function initFallback() {
     document.getElementById('fallback-view').style.display = 'flex';
     document.getElementById('fallback-name').textContent = _characterConfig.name;
     document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+    document.getElementById('status-bar').textContent = 'Fallback mode';
 
     document.getElementById('fallback-avatar').addEventListener('click', function() {
         playRandomMotion();
@@ -159,6 +228,7 @@ function initFallback() {
             document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
         }, 800);
     });
+    console.log('Fallback initialized for:', _characterConfig.name);
 }
 
 // ========== Live2D 渲染 ==========
@@ -172,11 +242,13 @@ function startLive2D() {
         }
 
         document.getElementById('status-bar').textContent = 'Loading Live2D...';
+        var size = getCanvasSize();
+        console.log('Live2D canvas size:', size.width, 'x', size.height);
 
         _pixiApp = new PIXI.Application({
             view: canvas,
-            width: canvas.clientWidth,
-            height: canvas.clientHeight,
+            width: size.width,
+            height: size.height,
             transparent: true,
             autoStart: true,
             resizeTo: canvas
@@ -201,15 +273,16 @@ function startLive2D() {
             if (_bridge) {
                 _bridge.on_model_loaded(_characterConfig.name);
             }
+            console.log('Live2D model loaded successfully');
         }).catch(function(err) {
-            console.error('Live2D load error:', err);
+            console.error('Live2D load error:', err.message);
             document.getElementById('status-bar').textContent = 'Live2D failed: ' + err.message;
-            return false;
+            initFallback();
         });
 
         return true;
     } catch (e) {
-        console.error('Live2D init error:', e);
+        console.error('Live2D init error:', e.message);
         document.getElementById('status-bar').textContent = 'Live2D SDK error';
         return false;
     }
@@ -221,14 +294,21 @@ function startVRM() {
 
     try {
         if (typeof THREE === 'undefined') {
-            console.log('Three.js not available');
+            console.error('Three.js not loaded');
+            return false;
+        }
+        if (typeof THREE.GLTFLoader === 'undefined') {
+            console.error('GLTFLoader not loaded');
             return false;
         }
 
         document.getElementById('status-bar').textContent = 'Loading VRM...';
 
-        var width = canvas.clientWidth;
-        var height = canvas.clientHeight;
+        var size = getCanvasSize();
+        var width = size.width;
+        var height = size.height;
+        console.log('VRM canvas size:', width, 'x', height);
+        console.log('Model path:', _characterConfig.modelPath);
 
         // 场景
         _threeScene = new THREE.Scene();
@@ -238,15 +318,19 @@ function startVRM() {
         _threeCamera = new THREE.PerspectiveCamera(30, width / height, 0.1, 1000);
         _threeCamera.position.set(0, 1.3, 2.5);
 
-        // 渲染器
+        // 渲染器 - 使用不透明背景确保可见
         _threeRenderer = new THREE.WebGLRenderer({
             canvas: canvas,
-            alpha: true,
-            antialias: true
+            alpha: false,
+            antialias: true,
+            preserveDrawingBuffer: true
         });
         _threeRenderer.setSize(width, height);
-        _threeRenderer.setPixelRatio(window.devicePixelRatio);
+        _threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        _threeRenderer.setClearColor(0xf0e6fa, 1);  // 淡紫色背景
         _threeRenderer.outputColorSpace = THREE.SRGBColorSpace;
+
+        console.log('WebGL renderer created:', _threeRenderer.domElement.width, 'x', _threeRenderer.domElement.height);
 
         // 灯光
         var ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
@@ -271,25 +355,34 @@ function startVRM() {
             loader.register(function(parser) {
                 return new THREEVRM.VRMLoaderPlugin(parser);
             });
+            console.log('VRM plugin registered');
+        } else {
+            console.warn('THREEVRM not available, loading as plain GLTF');
         }
 
         loader.load(
             _characterConfig.modelPath,
             function(gltf) {
+                console.log('GLTF loaded, has VRM:', !!gltf.userData.vrm);
                 var vrm = gltf.userData.vrm;
 
                 if (vrm) {
-                    // VRM 模型
                     _threeModel = vrm;
                     _threeScene.add(vrm.scene);
-
-                    // 调整模型朝向
                     vrm.scene.rotation.y = Math.PI;
+
+                    // 自动调整相机位置
+                    var box = new THREE.Box3().setFromObject(vrm.scene);
+                    var center = box.getCenter(new THREE.Vector3());
+                    var size = box.getSize(new THREE.Vector3());
+                    var maxDim = Math.max(size.x, size.y, size.z);
+                    var dist = maxDim * 2;
+                    _threeCamera.position.set(center.x, center.y + size.y * 0.3, center.z + dist);
+                    _threeCamera.lookAt(center);
 
                     document.getElementById('status-bar').textContent = 'VRM Loaded';
                     console.log('VRM model loaded:', _characterConfig.name);
                 } else {
-                    // 普通 GLTF 模型
                     _threeModel = { scene: gltf.scene, update: function() {} };
                     _threeScene.add(gltf.scene);
 
@@ -309,19 +402,24 @@ function startVRM() {
                 animate();
             },
             function(progress) {
-                var percent = Math.round((progress.loaded / progress.total) * 100);
-                document.getElementById('status-bar').textContent = 'Loading: ' + percent + '%';
+                if (progress.total > 0) {
+                    var percent = Math.round((progress.loaded / progress.total) * 100);
+                    document.getElementById('status-bar').textContent = 'Loading: ' + percent + '%';
+                }
             },
             function(error) {
-                console.error('VRM load error:', error);
-                document.getElementById('status-bar').textContent = 'VRM load failed: ' + error.message;
+                console.error('VRM load error:', error.message || error);
+                document.getElementById('status-bar').textContent = 'VRM load failed';
                 initFallback();
             }
         );
 
+        // 立即开始渲染循环（显示空场景）
+        animate();
+
         return true;
     } catch (e) {
-        console.error('VRM init error:', e);
+        console.error('VRM init error:', e.message);
         document.getElementById('status-bar').textContent = 'VRM init error';
         return false;
     }
@@ -330,11 +428,13 @@ function startVRM() {
 function animate() {
     _threeAnimationId = requestAnimationFrame(animate);
 
-    var deltaTime = _threeClock.getDelta();
+    if (_threeClock) {
+        var deltaTime = _threeClock.getDelta();
 
-    // 更新 VRM 模型
-    if (_threeModel && _threeModel.update) {
-        _threeModel.update(deltaTime);
+        // 更新 VRM 模型
+        if (_threeModel && _threeModel.update) {
+            _threeModel.update(deltaTime);
+        }
     }
 
     // 渲染场景
@@ -346,7 +446,7 @@ function animate() {
 // ========== 公共接口 ==========
 function playMotion(name, group) {
     _currentMotion = name;
-    console.log('Motion:', name, group);
+    console.log('Motion:', name, group || '');
     fallbackReaction(name);
 
     // VRM 表情支持
@@ -373,7 +473,7 @@ function playMotion(name, group) {
             var motionGroup = group || 'TapBody';
             _live2dModel.motion(motionGroup);
         } catch(e) {
-            console.log('Live2D motion error:', e);
+            console.log('Live2D motion error:', e.message);
         }
     }
 
@@ -400,11 +500,11 @@ function setExpression(name) {
     var avatar = document.getElementById('fallback-avatar');
     if (avatar) {
         if (name === 'happy') {
-            avatar.textContent = '😊';
+            avatar.textContent = '\ud83d\ude0a';
         } else if (name === 'surprised') {
-            avatar.textContent = '😮';
+            avatar.textContent = '\ud83d\ude2e';
         } else if (name === 'sad') {
-            avatar.textContent = '😢';
+            avatar.textContent = '\ud83d\ude22';
         }
         setTimeout(function() {
             avatar.textContent = _characterConfig.avatar;
@@ -417,11 +517,11 @@ function fallbackReaction(motion) {
     if (!avatar) return;
 
     if (motion === 'happy' || motion === 'joy') {
-        avatar.textContent = '😊';
+        avatar.textContent = '\ud83d\ude0a';
     } else if (motion === 'surprised') {
-        avatar.textContent = '😮';
+        avatar.textContent = '\ud83d\ude2e';
     } else if (motion === 'sad' || motion === 'upset') {
-        avatar.textContent = '😢';
+        avatar.textContent = '\ud83d\ude22';
     } else {
         var emojis = _emojis;
         avatar.textContent = emojis[Math.floor(Math.random() * emojis.length)];
@@ -438,9 +538,7 @@ function playRandomMotion() {
 }
 
 function setMouseFollow(x, y) {
-    // VRM 头部跟踪（可选实现）
     if (_threeModel && _threeModel.lookAt) {
-        // 简单的鼠标跟踪
         var targetX = (x / window.innerWidth - 0.5) * 2;
         var targetY = (y / window.innerHeight - 0.5) * 2;
         _threeModel.lookAt.target.position.set(targetX * 0.5, targetY * 0.5 + 1.3, 2);
@@ -450,17 +548,14 @@ function setMouseFollow(x, y) {
 function setModelScale(scale) {
     _modelScale = scale;
 
-    // VRM 缩放
     if (_threeModel && _threeModel.scene) {
         _threeModel.scene.scale.set(scale, scale, scale);
     }
 
-    // Live2D 缩放
     if (_live2dModel) {
         _live2dModel.scale.set(scale);
     }
 
-    // Fallback 缩放
     var avatar = document.getElementById('fallback-avatar');
     if (avatar) {
         avatar.style.transform = 'scale(' + scale + ')';
@@ -482,34 +577,26 @@ function stopIdleTimer() {
 
 // ========== 窗口大小调整 ==========
 window.addEventListener('resize', function() {
-    var canvas = document.getElementById('model-canvas');
-    if (!canvas) return;
+    var size = getCanvasSize();
 
-    var width = canvas.clientWidth;
-    var height = canvas.clientHeight;
-
-    // Three.js 响应式
     if (_threeCamera && _threeRenderer) {
-        _threeCamera.aspect = width / height;
+        _threeCamera.aspect = size.width / size.height;
         _threeCamera.updateProjectionMatrix();
-        _threeRenderer.setSize(width, height);
+        _threeRenderer.setSize(size.width, size.height);
     }
 
-    // Live2D 响应式
     if (_pixiApp) {
-        _pixiApp.renderer.resize(width, height);
+        _pixiApp.renderer.resize(size.width, size.height);
     }
 });
 
 // ========== 清理旧资源 ==========
 function cleanup() {
-    // 停止动画循环
     if (_threeAnimationId) {
         cancelAnimationFrame(_threeAnimationId);
         _threeAnimationId = null;
     }
 
-    // 销毁 Three.js 场景中的所有资源
     if (_threeScene) {
         _threeScene.traverse(function(obj) {
             if (obj.geometry) obj.geometry.dispose();
@@ -524,7 +611,6 @@ function cleanup() {
         });
     }
 
-    // 销毁 VRM 模型
     if (_threeModel) {
         if (_threeModel.dispose) _threeModel.dispose();
         if (_threeModel.scene) {
@@ -541,14 +627,11 @@ function cleanup() {
         }
     }
 
-    // 销毁渲染器
     if (_threeRenderer) {
         _threeRenderer.dispose();
-        _threeRenderer.domElement = null;
         _threeRenderer = null;
     }
 
-    // 销毁 Live2D
     if (_pixiApp) {
         _pixiApp.destroy(true);
         _pixiApp = null;
@@ -559,11 +642,13 @@ function cleanup() {
     _threeModel = null;
     _live2dModel = null;
     stopIdleTimer();
+    console.log('Cleanup done');
 }
 
 // ========== 外部配置注入 ==========
 function updateConfig(config) {
-    console.log('updateConfig called:', config);
+    console.log('updateConfig called:', JSON.stringify(config));
+    document.getElementById('static-indicator').style.display = 'none';
     cleanup();
     _characterConfig = config;
     document.title = _characterConfig.name;
@@ -594,7 +679,6 @@ function main() {
 
         var started = false;
 
-        // 根据配置自动选择渲染方式
         if (_characterConfig.styleType === 'vrm') {
             console.log('Starting VRM mode...');
             started = startVRM();
@@ -603,7 +687,6 @@ function main() {
             started = startLive2D();
         }
 
-        // 如果加载失败，显示 fallback
         if (!started) {
             console.log('Model loading failed, using fallback');
             initFallback();
@@ -611,8 +694,13 @@ function main() {
     });
 }
 
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('static-indicator').textContent = 'DOM ready, waiting for CDN scripts...';
+});
+
 window.onload = function() {
-    // 等待外部注入配置，如果 2000ms 内没有注入则使用默认配置
+    console.log('window.onload fired');
+    document.getElementById('static-indicator').textContent = 'All scripts loaded, waiting for config...';
     window._configInjected = false;
     setTimeout(function() {
         if (!window._configInjected) {
