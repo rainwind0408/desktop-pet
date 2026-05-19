@@ -175,27 +175,34 @@ class ModelManager(QObject):
         return True
 
     def _resolve_model_path(self, model_path):
-        """将相对路径转换为绝对路径"""
-        # 如果已经是绝对路径，直接返回
+        """将路径转换为 file:/// URL 格式"""
+        # 如果是相对路径，先转换为绝对路径
+        if not os.path.isabs(model_path):
+            # 获取 characters 目录
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            characters_dir = os.path.join(project_root, "characters")
+
+            # 尝试多种路径组合
+            candidates = [
+                os.path.join(characters_dir, model_path),
+                os.path.join(characters_dir, "assets", model_path),
+                model_path
+            ]
+
+            for path in candidates:
+                if os.path.exists(path):
+                    model_path = os.path.abspath(path)
+                    break
+
+        # 将 Windows 路径转换为 file:/// URL
         if os.path.isabs(model_path):
-            return model_path
+            # 将反斜杠替换为正斜杠，并添加 file:/// 前缀
+            url_path = model_path.replace('\\', '/')
+            if url_path.startswith('C:'):
+                # Windows 驱动器路径
+                url_path = '/' + url_path
+            return f'file:///{url_path}'
 
-        # 获取 characters 目录
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        characters_dir = os.path.join(project_root, "characters")
-
-        # 尝试多种路径组合
-        candidates = [
-            os.path.join(characters_dir, model_path),
-            os.path.join(characters_dir, "assets", model_path),
-            model_path
-        ]
-
-        for path in candidates:
-            if os.path.exists(path):
-                return os.path.abspath(path)
-
-        # 返回原始路径，让 JS 处理错误
         return model_path
 
     def _on_model_loaded(self, model_path, model_type, result):
