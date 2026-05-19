@@ -161,6 +161,8 @@ class ModelWidget(QWidget):
     def play_motion(self, motion_name, group=""):
         if self._use_fallback:
             return
+        # 处理默认值
+        motion_group = group if group else 'TapBody'
         # 通过 JS 接口播放动作
         js = f"""
         (function() {{
@@ -189,7 +191,7 @@ class ModelWidget(QWidget):
                 const engine = window.renderer.engines.live2d;
                 if (engine && engine.currentModel) {{
                     try {{
-                        engine.currentModel.motion('{group || 'TapBody'}');
+                        engine.currentModel.motion('{motion_group}');
                     }} catch(e) {{
                         console.log('Live2D motion error:', e.message);
                     }}
