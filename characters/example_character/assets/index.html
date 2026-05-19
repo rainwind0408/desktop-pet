@@ -496,6 +496,51 @@ window.addEventListener('resize', function() {
     }
 });
 
+// ========== 清理旧资源 ==========
+function cleanup() {
+    if (_threeAnimationId) {
+        cancelAnimationFrame(_threeAnimationId);
+        _threeAnimationId = null;
+    }
+    if (_threeRenderer) {
+        _threeRenderer.dispose();
+        _threeRenderer = null;
+    }
+    if (_pixiApp) {
+        _pixiApp.destroy(true);
+        _pixiApp = null;
+    }
+    _threeScene = null;
+    _threeCamera = null;
+    _threeModel = null;
+    _live2dModel = null;
+    stopIdleTimer();
+}
+
+// ========== 外部配置注入 ==========
+function updateConfig(config) {
+    console.log('updateConfig called:', config);
+    cleanup();
+    _characterConfig = config;
+    document.title = _characterConfig.name;
+
+    initBridge();
+
+    var started = false;
+    if (_characterConfig.styleType === 'vrm') {
+        console.log('Starting VRM mode...');
+        started = startVRM();
+    } else {
+        console.log('Starting Live2D mode...');
+        started = startLive2D();
+    }
+
+    if (!started) {
+        console.log('Model loading failed, using fallback');
+        initFallback();
+    }
+}
+
 // ========== 主入口 ==========
 function main() {
     loadConfig(function(config) {
@@ -523,7 +568,14 @@ function main() {
 }
 
 window.onload = function() {
-    main();
+    // 等待外部注入配置，如果 500ms 内没有注入则使用默认配置
+    window._configInjected = false;
+    setTimeout(function() {
+        if (!window._configInjected) {
+            console.log('No config injected, using default');
+            main();
+        }
+    }, 500);
 };
 </script>
 </body>
