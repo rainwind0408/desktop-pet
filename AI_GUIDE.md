@@ -450,6 +450,17 @@ curl -X PUT http://127.0.0.1:5000/api/config/llm \
 2. **CDN 依赖**: 模型渲染依赖 CDN 加载 Three.js/Live2D SDK，需要网络
 3. **WebEngine 网络警告**: 启动时可能有 `Network service crashed` 日志，不影响功能
 4. **Embedding 降级**: 无 API Key 时使用 n-gram 哈希，检索精度降低
+
+### 渲染引擎版本约束
+
+| 依赖 | 版本 | 约束原因 |
+|------|------|----------|
+| Three.js | 0.146.0 | 最后支持 `examples/js/` 全局变量加载的版本 |
+| three-vrm | 1.0.6 | 兼容 three@0.146.0 的最新 1.x 版本 |
+| pixi.js | 6.5.10 | pixi-live2d-display@0.4.0 依赖 |
+| pixi-live2d-display | 0.4.0 | 支持 Cubism 4 的稳定版本 |
+
+**重要**: 不要随意升级 Three.js 到 ≥ 0.154.0，该版本移除了 `examples/js/` 目录，会导致 GLTFLoader 和 OrbitControls 加载失败（404）。如需升级，必须改用 ES Module (`<script type="module">`) 加载方式。
 5. **单机部署**: 当前设计为单机运行，不支持多设备同步
 
 ---
