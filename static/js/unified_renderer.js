@@ -660,4 +660,185 @@ window.addEventListener('resize', () => {
     }
 });
 
+// ========== 动画控制接口 ==========
+
+// 表情映射
+const expressionMap = {
+    'happy': 'happy',
+    'joy': 'happy',
+    'surprised': 'surprised',
+    'sad': 'sad',
+    'upset': 'angry',
+    'angry': 'angry',
+    'neutral': 'neutral'
+};
+
+// 空闲动画定时器
+let _idleInterval = null;
+let _idleMs = 5000;
+
+/**
+ * 播放动作/表情
+ * @param {string} name - 动作名称
+ * @param {string} group - 动作组（Live2D 用）
+ */
+window.playMotion = (name, group) => {
+    console.log('[Animation] playMotion:', name, group || '');
+
+    const renderer = window.renderer;
+    if (!renderer) return;
+
+    // VRM 表情支持
+    if (renderer.engines.vrm && renderer.engines.vrm.currentModel) {
+        const vrm = renderer.engines.vrm.currentModel;
+        if (vrm.expressionManager) {
+            const expression = expressionMap[name] || name;
+            try {
+                vrm.expressionManager.setValue(expression, 1.0);
+                setTimeout(() => {
+                    vrm.expressionManager.setValue(expression, 0);
+                }, 1500);
+                console.log('[Animation] VRM expression:', expression);
+            } catch (e) {
+                console.warn('[Animation] VRM expression error:', e.message);
+            }
+        }
+    }
+
+    // Live2D 动作支持
+    if (renderer.engines.live2d && renderer.engines.live2d.currentModel) {
+        const model = renderer.engines.live2d.currentModel;
+        try {
+            const motionGroup = group || 'TapBody';
+            model.motion(motionGroup);
+            console.log('[Animation] Live2D motion:', motionGroup);
+        } catch (e) {
+            console.warn('[Animation] Live2D motion error:', e.message);
+        }
+    }
+};
+
+/**
+ * 设置表情
+ * @param {string} name - 表情名称
+ */
+window.setExpression = (name) => {
+    console.log('[Animation] setExpression:', name);
+
+    const renderer = window.renderer;
+    if (!renderer) return;
+
+    // VRM 表情
+    if (renderer.engines.vrm && renderer.engines.vrm.currentModel) {
+        const vrm = renderer.engines.vrm.currentModel;
+        if (vrm.expressionManager) {
+            try {
+                vrm.expressionManager.setValue(name, 1.0);
+                setTimeout(() => {
+                    vrm.expressionManager.setValue(name, 0);
+                }, 1500);
+            } catch (e) {
+                console.warn('[Animation] VRM expression error:', e.message);
+            }
+        }
+    }
+
+    // Live2D 表情
+    if (renderer.engines.live2d && renderer.engines.live2d.currentModel) {
+        const model = renderer.engines.live2d.currentModel;
+        try {
+            model.expression(name);
+        } catch (e) {
+            console.warn('[Animation] Live2D expression error:', e.message);
+        }
+    }
+};
+
+/**
+ * 播放随机动作
+ */
+window.playRandomMotion = () => {
+    const motions = ['happy', 'surprised', 'sad', 'joy'];
+    const randomMotion = motions[Math.floor(Math.random() * motions.length)];
+    window.playMotion(randomMotion);
+};
+
+/**
+ * 鼠标跟随
+ * @param {number} x - 鼠标 X 坐标
+ * @param {number} y - 鼠标 Y 坐标
+ */
+window.setMouseFollow = (x, y) => {
+    const renderer = window.renderer;
+    if (!renderer) return;
+
+    // VRM LookAt
+    if (renderer.engines.vrm && renderer.engines.vrm.currentModel) {
+        const vrm = renderer.engines.vrm.currentModel;
+        if (vrm.lookAt && vrm.lookAt.target) {
+            const targetX = (x / window.innerWidth - 0.5) * 2;
+            const targetY = (y / window.innerHeight - 0.5) * 2;
+            vrm.lookAt.target.position.set(targetX * 0.5, targetY * 0.5 + 1.3, 2);
+        }
+    }
+
+    // Live2D 鼠标跟随
+    if (renderer.engines.live2d && renderer.engines.live2d.currentModel) {
+        const model = renderer.engines.live2d.currentModel;
+        if (model.focus) {
+            model.focus(x, y);
+        }
+    }
+};
+
+/**
+ * 启动空闲动画定时器
+ * @param {number} intervalMs - 间隔毫秒
+ */
+window.startIdleTimer = (intervalMs) => {
+    window.stopIdleTimer();
+    _idleMs = intervalMs || 5000;
+    _idleInterval = setInterval(() => {
+        window.playRandomMotion();
+    }, _idleMs);
+    console.log('[Animation] Idle timer started:', _idleMs, 'ms');
+};
+
+/**
+ * 停止空闲动画定时器
+ */
+window.stopIdleTimer = () => {
+    if (_idleInterval) {
+        clearInterval(_idleInterval);
+        _idleInterval = null;
+        console.log('[Animation] Idle timer stopped');
+    }
+};
+
+/**
+ * 设置模型缩放
+ * @param {number} scale - 缩放比例
+ */
+window.setModelScale = (scale) => {
+    const renderer = window.renderer;
+    if (!renderer) return;
+
+    // VRM 缩放
+    if (renderer.engines.vrm && renderer.engines.vrm.currentModel) {
+        const vrm = renderer.engines.vrm.currentModel;
+        if (vrm.scene) {
+            vrm.scene.scale.set(scale, scale, scale);
+        }
+    }
+
+    // Live2D 缩放
+    if (renderer.engines.live2d && renderer.engines.live2d.currentModel) {
+        const model = renderer.engines.live2d.currentModel;
+        model.scale.set(scale);
+    }
+
+    console.log('[Animation] Model scale:', scale);
+};
+
+console.log('[Renderer] Animation controls loaded');
 console.log('[Renderer] Unified renderer loaded');
