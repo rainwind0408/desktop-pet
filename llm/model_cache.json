@@ -1,0 +1,78 @@
+{
+  "last_update": "2026-05-19T00:00:00Z",
+  "update_interval_hours": 720,
+  "providers": {
+    "openai": {
+      "models": ["gpt-5.5", "gpt-5.5-instant", "gpt-5.5-pro", "gpt-4.1", "o4-mini", "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-4-vision-preview", "gpt-3.5-turbo"],
+      "default_model": "gpt-4.1",
+      "api_base": "https://api.openai.com/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "deepseek": {
+      "models": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"],
+      "default_model": "deepseek-v4-flash",
+      "api_base": "https://api.deepseek.com/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "qwen": {
+      "models": ["qwen3-max", "qwen3-plus", "qwen3-flash", "qwen3-omni-flash", "qwq-plus", "qwen3-express"],
+      "default_model": "qwen3-flash",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "zhipu": {
+      "models": ["glm-5", "glm-5-flash", "glm-5-turbo", "glm-4-plus", "glm-4"],
+      "default_model": "glm-5-flash",
+      "api_base": "https://open.bigmodel.cn/api/paas/v4",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "moonshot": {
+      "models": ["kimi-k2.6", "kimi-k2.5", "kimi-k2"],
+      "default_model": "kimi-k2.6",
+      "api_base": "https://api.moonshot.cn/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "anthropic": {
+      "models": ["claude-sonnet-4-20250514", "claude-haiku-3-5-20250514", "claude-sonnet-3-5-20250219", "claude-haiku-3-20240307"],
+      "default_model": "claude-sonnet-4-20250514",
+      "api_base": "https://api.anthropic.com",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "baidu": {
+      "models": ["ernie-5.5", "ernie-5.5-turbo", "ernie-5.5-flash", "ernie-4.0", "ernie-3.5"],
+      "default_model": "ernie-5.5-turbo",
+      "api_base": "https://qianfan.baidubce.com/v2",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "minimax": {
+      "models": ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"],
+      "default_model": "MiniMax-M2.7",
+      "api_base": "https://api.minimaxi.com/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "stepfun": {
+      "models": ["step-3.5-flash", "step-3.5-pro", "step-3.5-mini"],
+      "default_model": "step-3.5-flash",
+      "api_base": "https://api.stepfun.com/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "doubao": {
+      "models": ["doubao-seed-2.0-pro-256k", "doubao-seed-2.0-lite-128k", "doubao-seed-2.0-flash-256k", "doubao-seed-2.0-code"],
+      "default_model": "doubao-seed-2.0-lite-128k",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "ollama": {
+      "models": ["llama3", "qwen2.5", "mistral", "gemma2", "phi3", "mixtral", "dolphin"],
+      "default_model": "llama3",
+      "api_base": "http://localhost:11434/v1",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    },
+    "custom": {
+      "models": [],
+      "default_model": "",
+      "api_base": "",
+      "fetched_at": "2026-05-19T00:00:00Z"
+    }
+  }
+}
