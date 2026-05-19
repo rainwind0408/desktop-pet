@@ -11,12 +11,14 @@ from PyQt5.QtWidgets import (
     QMainWindow, QMenu, QSystemTrayIcon, QAction, QLabel,
     QApplication, QDialog, QVBoxLayout, QSlider, QGroupBox,
     QComboBox, QPushButton, QHBoxLayout, QScrollArea, QWidget,
-    QTextBrowser, QLineEdit, QSplitter, QMessageBox, QFormLayout
+    QTextBrowser, QLineEdit, QSplitter, QMessageBox, QFormLayout,
+    QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QObject
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 
 from .model_widget import ModelWidget
+from llm.factory import PROVIDER_PRESETS
 
 
 API_BASE = "http://127.0.0.1:5000/api"
@@ -311,21 +313,15 @@ class SettingsDialog(QDialog):
         outer_layout.addWidget(scroll)
 
     def init_default_providers(self):
-        """初始化默认提供商列表"""
-        default_providers = [
-            {"key": "openai", "name": "OpenAI", "models": ["gpt-5.5", "gpt-5.5-instant", "gpt-5.5-pro", "gpt-4.1", "o4-mini"], "default_model": "gpt-4.1"},
-            {"key": "deepseek", "name": "DeepSeek", "models": ["deepseek-v4-pro", "deepseek-v4-flash"], "default_model": "deepseek-v4-flash"},
-            {"key": "qwen", "name": "通义千问 (Qwen)", "models": ["qwen3-max", "qwen3-plus", "qwen3-flash", "qwen3-omni-flash", "qwq-plus"], "default_model": "qwen3-flash"},
-            {"key": "zhipu", "name": "智谱 (GLM)", "models": ["glm-5", "glm-5-flash", "glm-5-turbo"], "default_model": "glm-5-flash"},
-            {"key": "moonshot", "name": "月之暗面 (Kimi)", "models": ["kimi-k2.6", "kimi-k2.5"], "default_model": "kimi-k2.6"},
-            {"key": "anthropic", "name": "Anthropic Claude", "models": ["claude-sonnet-4-20250514", "claude-haiku-3-5-20250514"], "default_model": "claude-sonnet-4-20250514"},
-            {"key": "baidu", "name": "百度文心 (ERNIE)", "models": ["ernie-5.5", "ernie-5.5-turbo", "ernie-5.5-flash"], "default_model": "ernie-5.5-turbo"},
-            {"key": "minimax", "name": "MiniMax", "models": ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"], "default_model": "MiniMax-M2.7"},
-            {"key": "stepfun", "name": "阶跃星辰 (StepFun)", "models": ["step-3.5-flash", "step-3.5-pro", "step-3.5-mini"], "default_model": "step-3.5-flash"},
-            {"key": "doubao", "name": "豆包 (ByteDance)", "models": ["doubao-seed-2.0-pro-256k", "doubao-seed-2.0-lite-128k", "doubao-seed-2.0-flash-256k", "doubao-seed-2.0-code"], "default_model": "doubao-seed-2.0-lite-128k"},
-            {"key": "ollama", "name": "Ollama (本地)", "models": ["llama3", "qwen2.5", "mistral", "gemma2"], "default_model": "llama3"},
-            {"key": "custom", "name": "自定义 OpenAI 兼容", "models": [], "default_model": ""},
-        ]
+        """从 LLM 工厂的 PROVIDER_PRESETS 动态加载提供商列表"""
+        default_providers = []
+        for key, preset in PROVIDER_PRESETS.items():
+            default_providers.append({
+                "key": key,
+                "name": preset["name"],
+                "models": preset["models"],
+                "default_model": preset["default_model"],
+            })
         self.providers_data = {p["key"]: p for p in default_providers}
         self.provider_combo.clear()
         self.provider_combo.addItems([p["name"] for p in default_providers])
@@ -491,6 +487,8 @@ class SettingsDialog(QDialog):
 
 
 class PetWindow(QMainWindow):
+    character_switch_requested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.drag_position = QPoint()
@@ -498,6 +496,7 @@ class PetWindow(QMainWindow):
         self.init_window()
         self.init_pet_display()
         self.init_tray()
+        self.character_switch_requested.connect(self.update_pet_display)
         self.show()
 
     def init_window(self):
@@ -601,12 +600,16 @@ class PetWindow(QMainWindow):
 
         chat_action = QAction("💬  对话", self)
         chat_action.triggered.connect(self.open_chat)
+        character_action = QAction("👤  选择角色", self)
+        character_action.triggered.connect(self.open_character_selector)
         settings_action = QAction("⚙  设置", self)
         settings_action.triggered.connect(self.open_settings)
         quit_action = QAction("✕  退出", self)
         quit_action.triggered.connect(self.quit_app)
 
         menu.addAction(chat_action)
+        menu.addSeparator()
+        menu.addAction(character_action)
         menu.addSeparator()
         menu.addAction(settings_action)
         menu.addSeparator()
@@ -642,6 +645,25 @@ class PetWindow(QMainWindow):
         dialog = ChatDialog(self)
         dialog.exec_()
 
+    def open_character_selector(self):
+        """打开角色选择对话框"""
+        if not hasattr(self, 'character_manager') or not self.character_manager:
+            QMessageBox.warning(self, "提示", "角色管理器未初始化")
+            return
+
+        dialog = CharacterSelectorDialog(self.character_manager, self)
+        dialog.character_selected.connect(self._on_character_selected)
+        dialog.exec_()
+
+    def _on_character_selected(self, character_id):
+        """角色被选择后的回调"""
+        try:
+            self.character_manager.switch_character(character_id)
+            self.update_pet_display()
+            print(f"[PetWindow] Switched to character: {character_id}")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"切换角色失败: {e}")
+
     def on_scale_changed(self, value):
         factor = value / 100.0
         self.scale_factor = factor
@@ -676,13 +698,159 @@ class PetWindow(QMainWindow):
     def update_pet_display(self):
         if hasattr(self, 'character_manager') and self.character_manager:
             char_id = self.character_manager.current_character_id
+            print(f"[PetWindow] update_pet_display: char_id={char_id}", flush=True)
             if char_id:
                 try:
                     profile = self.character_manager.load_character_profile(char_id)
+                    print(f"[PetWindow] profile loaded: {profile.get('name', '?') if profile else 'None'}", flush=True)
                     self.pet_display.load_character(char_id, profile)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[PetWindow] update_pet_display error: {e}", flush=True)
 
     def quit_app(self):
         self.tray_icon.hide()
         QApplication.quit()
+
+
+class CharacterSelectorDialog(QDialog):
+    """角色选择对话框"""
+
+    character_selected = pyqtSignal(str)  # 选中的角色 ID
+
+    def __init__(self, character_manager, parent=None):
+        super().__init__(parent)
+        self.character_manager = character_manager
+        self.setWindowTitle("选择角色")
+        self.setFixedSize(300, 400)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
+        self.init_ui()
+        self.load_characters()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # 标题
+        title = QLabel("选择要切换的角色：")
+        title.setStyleSheet("font-size: 14px; font-weight: bold; color: #333;")
+        layout.addWidget(title)
+
+        # 角色列表
+        self.character_list = QListWidget()
+        self.character_list.setStyleSheet("""
+            QListWidget {
+                background-color: #fafafa;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QListWidget::item {
+                padding: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QListWidget::item:selected {
+                background-color: #7c3aed;
+                color: white;
+            }
+            QListWidget::item:hover {
+                background-color: #f0e6ff;
+            }
+        """)
+        self.character_list.itemDoubleClicked.connect(self.on_character_double_clicked)
+        layout.addWidget(self.character_list)
+
+        # 按钮区域
+        btn_layout = QHBoxLayout()
+
+        select_btn = QPushButton("选择")
+        select_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7c3aed;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #6d28d9;
+            }
+            QPushButton:disabled {
+                background-color: #ccc;
+            }
+        """)
+        select_btn.clicked.connect(self.on_select_clicked)
+        self.select_btn = select_btn
+
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f5f5f5;
+                color: #666;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                padding: 10px 24px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+        """)
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_layout.addWidget(select_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+    def load_characters(self):
+        """加载角色列表"""
+        try:
+            characters = self.character_manager.get_available_characters()
+            current_id = self.character_manager.current_character_id
+
+            for char_id in characters:
+                try:
+                    profile = self.character_manager.load_character_profile(char_id)
+                    name = profile.get("name", char_id) if profile else char_id
+                    description = profile.get("description", "") if profile else ""
+                except Exception:
+                    name = char_id
+                    description = ""
+
+                # 创建列表项
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, char_id)  # 存储角色 ID
+
+                # 显示文本
+                display_text = name
+                if char_id == current_id:
+                    display_text += " (当前)"
+                if description:
+                    display_text += f"\n{description[:50]}..."
+
+                item.setText(display_text)
+                self.character_list.addItem(item)
+
+                # 高亮当前角色
+                if char_id == current_id:
+                    item.setSelected(True)
+
+        except Exception as e:
+            print(f"[CharacterSelector] Error loading characters: {e}")
+
+    def on_select_clicked(self):
+        """选择按钮点击"""
+        current_item = self.character_list.currentItem()
+        if current_item:
+            character_id = current_item.data(Qt.UserRole)
+            self.character_selected.emit(character_id)
+            self.accept()
+
+    def on_character_double_clicked(self, item):
+        """双击角色项"""
+        character_id = item.data(Qt.UserRole)
+        self.character_selected.emit(character_id)
+        self.accept()
