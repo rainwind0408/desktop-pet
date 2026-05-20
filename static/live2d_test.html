@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<title>Live2D Diagnostic Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: monospace; background: #1a1a2e; color: #eee; padding: 20px; }
+h2 { color: #e94560; margin-bottom: 10px; }
+#out {
+    background: #16213e;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+    max-height: 50vh;
+    overflow: auto;
+    border: 1px solid #0f3460;
+    margin-bottom: 12px;
+}
+#out .info { color: #a8d8ea; }
+#out .warn { color: #f5a623; }
+#out .error { color: #e94560; }
+#out .success { color: #4ecca3; }
+#container {
+    width: 400px; height: 500px;
+    border: 2px solid #0f3460;
+    border-radius: 8px;
+    background: #16213e;
+    margin-bottom: 12px;
+    position: relative;
+}
+#container canvas { width: 100% !important; height: 100% !important; }
+#model-url {
+    width: 100%;
+    padding: 8px 12px;
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    color: #eee;
+    font-size: 12px;
+    font-family: monospace;
+    margin-bottom: 8px;
+}
+button {
+    padding: 8px 20px;
+    background: #e94560;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    margin-right: 8px;
+    margin-bottom: 8px;
+}
+button:hover { background: #c73652; }
+button.secondary { background: #0f3460; }
+button.secondary:hover { background: #1a4a7a; }
+</style>
+</head>
+<body>
+<h2>🔍 Live2D Diagnostic Test</h2>
+<div id="out"></div>
+<input id="model-url" value="/static/test_model3.json" placeholder="Model URL (relative or absolute)">
+<div>
+    <button id="btn-test-url">Test HTTP URL</button>
+    <button id="btn-load" class="secondary">Load Model</button>
+    <button id="btn-check-sdk" class="secondary">Check SDK</button>
+</div>
+<div id="container"></div>
+
+<script src="sdk/live2dcubismcore.min.js"></script>
+<script src="sdk/pixi.min.js"></script>
+<script src="sdk/cubism4.min.js"></script>
+
+<script>
+var out = document.getElementById('out');
+var container = document.getElementById('container');
+
+function log(msg, cls) {
+    var line = document.createElement('div');
+    line.className = cls || 'info';
+    line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+    console.log(msg);
+}
+
+// SDK Diagnostics
+log('=== SDK Diagnostics ===');
+log('Live2DCubismCore: ' + (typeof Live2DCubismCore), typeof Live2DCubismCore !== 'undefined' ? 'success' : 'error');
+log('PIXI: ' + (typeof PIXI), typeof PIXI !== 'undefined' ? 'success' : 'error');
+
+if (typeof PIXI !== 'undefined') {
+    log('PIXI version: ' + (PIXI.VERSION || 'unknown'));
+    log('PIXI.utils: ' + (typeof PIXI.utils));
+    if (PIXI.utils) {
+        var utilsKeys = Object.keys(PIXI.utils).filter(function(k) {
+            return typeof PIXI.utils[k] === 'function';
+        });
+        log('PIXI.utils functions: ' + utilsKeys.join(', '));
+    }
+}
+
+// cubism4 exports check
+var l2dKeys = null;
+if (PIXI && PIXI.live2d) {
+    l2dKeys = Object.keys(PIXI.live2d);
+    log('PIXI.live2d exists, keys: ' + l2dKeys.join(', '));
+} else {
+    log('PIXI.live2d: ' + (PIXI ? typeof PIXI.live2d : 'N/A'), 'warn');
+}
+
+var hasLive2DModel = PIXI && PIXI.live2d && typeof PIXI.live2d.Live2DModel !== 'undefined';
+log('PIXI.live2d.Live2DModel: ' + hasLive2DModel, hasLive2DModel ? 'success' : 'error');
+
+if (PIXI && PIXI.live2d && PIXI.live2d.Live2DModel) {
+    log('Live2DModel constructor name: ' + (PIXI.live2d.Live2DModel.name || 'anonymous'));
+    log('Live2DModel.from type: ' + typeof PIXI.live2d.Live2DModel.from);
+}
+
+// WebGL check
+var canvas = document.createElement('canvas');
+var gl = null;
+try {
+    gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+} catch(e) {}
+log('WebGL: ' + (gl ? 'available' : 'NOT available'), gl ? 'success' : 'error');
+if (gl) {
+    var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+    if (debugInfo) {
+        log('GPU: ' + gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL));
+    }
+    log('MAX_TEXTURE_SIZE: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+}
+
+log('');
+
+// HTTP URL Test
+document.getElementById('btn-test-url').addEventListener('click', function() {
+    var url = document.getElementById('model-url').value.trim();
+    log('Testing URL: ' + url);
+
+    if (!url.startsWith('http')) {
+        url = 'http://127.0.0.1:5000' + (url.startsWith('/') ? url : '/' + url);
+        log('Resolved to: ' + url);
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+
+    xhr.onload = function() {
+        log('HTTP ' + xhr.status + ' ' + xhr.statusText + ' (' + xhr.responseText.length + ' bytes)',
+            xhr.status === 200 ? 'success' : 'error');
+        if (xhr.status === 200) {
+            try {
+                var json = JSON.parse(xhr.responseText);
+                log('Valid JSON: true');
+                log('Version: ' + json.Version);
+                if (json.FileReferences) {
+                    log('Moc: ' + json.FileReferences.Moc);
+                    log('Textures: ' + (json.FileReferences.Textures || []).join(', '));
+                    log('Physics: ' + json.FileReferences.Physics);
+                }
+            } catch(e) {
+                log('Invalid JSON: ' + e.message, 'error');
+            }
+        } else {
+            log('Response: ' + xhr.responseText.substring(0, 200), 'error');
+        }
+    };
+
+    xhr.onerror = function() {
+        log('Network error (CORS or server not running)', 'error');
+    };
+
+    xhr.send();
+});
+
+// SDK Check
+document.getElementById('btn-check-sdk').addEventListener('click', function() {
+    log('=== SDK Re-check ===');
+    log('Live2DCubismCore: ' + (typeof Live2DCubismCore));
+    log('PIXI: ' + (typeof PIXI));
+    if (PIXI) {
+        log('PIXI.live2d: ' + (typeof PIXI.live2d));
+        if (PIXI.live2d) {
+            log('PIXI.live2d keys: ' + Object.keys(PIXI.live2d).join(', '));
+        }
+    }
+});
+
+// Load Model
+document.getElementById('btn-load').addEventListener('click', async function() {
+    var url = document.getElementById('model-url').value.trim();
+    log('Loading model from: ' + url);
+
+    if (!url.startsWith('http')) {
+        url = 'http://127.0.0.1:5000' + (url.startsWith('/') ? url : '/' + url);
+    }
+    log('Full URL: ' + url);
+
+    try {
+        log('Creating PIXI app...');
+        var app = new PIXI.Application({
+            view: document.createElement('canvas'),
+            width: 400, height: 500,
+            transparent: true,
+            autoStart: false
+        });
+        container.appendChild(app.view);
+        log('PIXI app created');
+
+        if (!PIXI.live2d || !PIXI.live2d.Live2DModel) {
+            log('ERROR: PIXI.live2d.Live2DModel not available', 'error');
+            return;
+        }
+
+        log('Calling PIXI.live2d.Live2DModel.from()...');
+        var startTime = performance.now();
+
+        var model = await PIXI.live2d.Live2DModel.from(url);
+
+        var loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
+        log('Model loaded SUCCESS! (' + loadTime + 's)', 'success');
+
+        app.stage.addChild(model);
+        model.anchor.set(0.5, 0.5);
+        model.x = 200;
+        model.y = 300;
+        model.scale.set(0.5);
+        app.start();
+        log('Model added to stage and rendering started', 'success');
+
+    } catch (e) {
+        log('ERROR: ' + e.message, 'error');
+        log('Stack: ' + (e.stack || 'N/A'), 'error');
+        if (e.response) {
+            log('HTTP status: ' + e.response.status + ' ' + e.response.statusText, 'error');
+        }
+    }
+});
+
+log('=== Ready ===', 'success');
+log('Enter a model3.json URL and click "Load Model" to test', 'info');
+</script>
+</body>
+</html>

@@ -278,7 +278,7 @@ class UnifiedRenderer {
                     if (PIXI.live2d && PIXI.live2d.Live2DModel) {
                         clearInterval(check);
                         resolve();
-                    } else if (attempts > 50) {  // 5 秒超时
+                    } else if (attempts > 100) {  // 10 秒超时
                         clearInterval(check);
                         reject(new Error('Live2DModel not available (SDK not loaded correctly)'));
                     }
@@ -291,27 +291,41 @@ class UnifiedRenderer {
             throw new Error('render-container not found');
         }
 
-        // 初始化 PixiJS
-        const app = new PIXI.Application({
-            view: document.createElement('canvas'),
-            width: container.clientWidth,
-            height: container.clientHeight,
-            transparent: true,
-            autoStart: false,
-            resizeTo: container
-        });
+        // 确保容器有有效尺寸（布局未完成时使用默认值）
+        const w = container.clientWidth || 320;
+        const h = container.clientHeight || 380;
 
-        app.view.style.display = 'none';
-        container.appendChild(app.view);
+        // 增加重试机制
+        for (let retry = 0; retry < 3; retry++) {
+            try {
+                // 初始化 PixiJS
+                const app = new PIXI.Application({
+                    view: document.createElement('canvas'),
+                    width: w,
+                    height: h,
+                    transparent: true,
+                    autoStart: false,
+                    resizeTo: container
+                });
 
-        this.engines.live2d = {
-            app,
-            canvas: app.view,
-            currentModel: null,
-            ready: true
-        };
+                app.view.style.display = 'none';
+                container.appendChild(app.view);
 
-        console.log('[Renderer] Live2D engine initialized');
+                this.engines.live2d = {
+                    app,
+                    canvas: app.view,
+                    currentModel: null,
+                    ready: true
+                };
+
+                console.log('[Renderer] Live2D engine initialized');
+                return;  // 成功退出
+            } catch (e) {
+                console.warn(`[Renderer] Live2D init attempt ${retry + 1} failed:`, e.message);
+                if (retry === 2) throw e;  // 最后一次仍失败则抛出
+                await new Promise(r => setTimeout(r, 1000));  // 等 1 秒重试
+            }
+        }
     }
 
     /**
@@ -492,7 +506,22 @@ class UnifiedRenderer {
             this._updateStatus('Loading Live2D...');
             if (PIXI.live2d && PIXI.live2d.Live2DModel) {
                 console.log('[Renderer] Loading Live2D model via PIXI.live2d.Live2DModel');
-                model = await PIXI.live2d.Live2DModel.from(modelPath);
+                console.log('[Renderer] Model URL:', modelPath);
+                try {
+                    model = await PIXI.live2d.Live2DModel.from(modelPath);
+                    console.log('[Renderer] Live2DModel.from() resolved successfully');
+                } catch (loadErr) {
+                    console.error('[Renderer] Live2DModel.from() FAILED:', loadErr.message);
+                    // 尝试获取更多网络错误细节
+                    if (loadErr.response) {
+                        console.error('[Renderer] HTTP status:', loadErr.response.status, loadErr.response.statusText);
+                    }
+                    if (loadErr.stack) {
+                        console.error('[Renderer] Stack:', loadErr.stack.split('\n').slice(0, 4).join('\n'));
+                    }
+                    // 重新抛出让上层 catch 处理
+                    throw loadErr;
+                }
             } else if (typeof window.Live2DModel !== 'undefined') {
                 console.log('[Renderer] Using window.Live2DModel fallback');
                 model = await window.Live2DModel.from(modelPath);

@@ -91,6 +91,7 @@ class WebEngineRenderer(BaseRenderer):
             self._model_manager.model_switched.connect(self._on_unified_model_loaded)
             self._model_manager.model_load_error.connect(self._on_unified_model_error)
             self._model_manager.engine_ready.connect(self._on_engine_ready)
+            self._model_manager.engine_error.connect(self._on_engine_error)
 
             success = self._model_manager.preload_engines()
             if not success:
@@ -128,7 +129,7 @@ class WebEngineRenderer(BaseRenderer):
         return True
 
     def _load_legacy(self, character_id, profile, characters_dir):
-        """独立渲染模式加载（降级方案）"""
+        """独立渲染模式加载（降级方案）— 使用 HTTP 避免 file:/// 限制"""
         print(f"[WebEngineRenderer] Legacy mode: loading {character_id}")
 
         template_path = self._find_template(character_id, characters_dir)
@@ -145,8 +146,9 @@ class WebEngineRenderer(BaseRenderer):
             pass
 
         self._web_view.loadFinished.connect(self._on_page_loaded)
-        abs_path = os.path.abspath(template_path)
-        self._pending_url = QUrl.fromLocalFile(abs_path)
+        self._pending_url = QUrl(
+            f"http://127.0.0.1:5000/characters/{character_id}/assets/index.html"
+        )
         QTimer.singleShot(500, self._do_load_page)
         return True
 
@@ -257,6 +259,15 @@ class WebEngineRenderer(BaseRenderer):
 
     def _on_engine_ready(self, engine_type):
         print(f"[WebEngineRenderer] Engine ready: {engine_type}")
+
+    def _on_engine_error(self, engine_type, error):
+        """引擎初始化失败 — 对 Live2D 降级到 Legacy 模式"""
+        print(f"[WebEngineRenderer] Engine error: {engine_type} - {error}")
+        if engine_type == "live2d" and self._profile:
+            print("[WebEngineRenderer] Falling back to legacy mode for Live2D")
+            self._render_mode = "legacy"
+            characters_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) + "/characters"
+            self._load_legacy(self._character_id, self._profile, characters_dir)
 
     # ========== 旧模式回调 ==========
 

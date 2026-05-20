@@ -176,8 +176,9 @@ class ModelWidget(QWidget):
             self._show_fallback(f"未知渲染类型: {style_type}")
             return
 
-        # 同类型切换：复用 Renderer
-        if self._renderer and self._renderer_type == style_type:
+        # 同类型切换或 WebEngineRenderer 间切换（vrm ↔ live2d）：复用 Renderer
+        if self._renderer and (self._renderer_type == style_type or
+                               isinstance(self._renderer, WebEngineRenderer)):
             self._renderer.load(character_id, profile, CHARACTERS_DIR)
             return
 

@@ -5,7 +5,7 @@ Flask API 服务模块
 
 import json
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
 from llm.factory import (
@@ -15,9 +15,18 @@ from llm.factory import (
 )
 
 
+# 项目根目录和角色数据目录
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHARACTERS_DIR = os.path.join(ROOT_DIR, "characters")
+
+
 class APIServer:
     def __init__(self, character_manager=None, environment_sensor=None, memory_system=None, interaction_decider=None, media_sensor=None):
-        self.app = Flask(__name__)
+        self.app = Flask(
+            __name__,
+            static_folder=os.path.join(ROOT_DIR, 'static'),
+            static_url_path='/static'
+        )
         CORS(self.app)
 
         self.character_manager = character_manager
@@ -31,6 +40,11 @@ class APIServer:
 
     def _register_routes(self):
         app = self.app
+
+        @app.route('/characters/<path:filename>')
+        def serve_character_files(filename):
+            """HTTP 服务角色模型/页面文件，避免 file:/// 协议限制"""
+            return send_from_directory(CHARACTERS_DIR, filename)
 
         @app.route('/api/characters', methods=['GET'])
         def get_characters():
@@ -75,8 +89,7 @@ class APIServer:
                 profile = self.character_manager.switch_character(character_id)
                 if self._on_character_switched:
                     try:
-                        from PyQt5.QtCore import QTimer
-                        QTimer.singleShot(0, self._on_character_switched)
+                        self._on_character_switched()
                     except Exception:
                         pass
                 return jsonify(profile)

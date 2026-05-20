@@ -58,10 +58,12 @@ html, body {
 <div id="debug-panel"></div>
 
 <!-- Live2D SDK (本地) — 加载顺序必须正确 -->
+<!-- 1: Cubism Core (asm.js, 无 wasm 依赖) -->
 <script src="sdk/live2dcubismcore.min.js"></script>
-<script src="sdk/cubism4.min.js"></script>
+<!-- 2: PixiJS (核心渲染引擎) -->
 <script src="sdk/pixi.min.js"></script>
-<script src="sdk/pixi-live2d-display.min.js"></script>
+<!-- 3: cubism4 (Cubism 4 专用，无 Cubism 2 依赖) -->
+<script src="sdk/cubism4.min.js"></script>
 
 <!-- Three.js + VRM SDK (本地) -->
 <script src="sdk/three.min.js"></script>

@@ -7,6 +7,7 @@ import os
 import time
 from enum import Enum
 from collections import deque
+from urllib.parse import quote
 
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer, QUrl
 from PyQt5.QtWebChannel import QWebChannel
@@ -98,16 +99,9 @@ class ModelManager(QObject):
         return os.path.join(project_root, "static", "renderer.html")
 
     def preload_engines(self):
-        """预加载所有引擎"""
-        renderer_path = self.get_renderer_path()
-        if not os.path.exists(renderer_path):
-            error_msg = f"Renderer not found: {renderer_path}"
-            print(f"[ModelManager] {error_msg}")
-            self.engine_error.emit("all", error_msg)
-            return False
-
-        print(f"[ModelManager] Loading renderer: {renderer_path}")
-        self._set_state("loading", "Loading renderer page...")
+        """预加载所有引擎 — 通过 Flask HTTP 服务加载，避免 file:/// 下 WebAssembly 限制"""
+        print(f"[ModelManager] Loading renderer via HTTP", flush=True)
+        self._set_state("loading", "Loading renderer page via HTTP...")
 
         # 断开旧连接
         try:
@@ -116,10 +110,10 @@ class ModelManager(QObject):
             pass
 
         self.web_view.loadFinished.connect(self._on_page_loaded)
-        self.web_view.load(QUrl.fromLocalFile(renderer_path))
+        self.web_view.load(QUrl("http://127.0.0.1:5000/static/renderer.html"))
 
-        # 启动就绪检查超时（15 秒）
-        self._ready_check_timer.start(15000)
+        # 启动就绪检查超时（30 秒）
+        self._ready_check_timer.start(30000)
 
         return True
 
@@ -168,6 +162,9 @@ class ModelManager(QObject):
         # JS 端就绪，按需初始化引擎
         print("[ModelManager] JS ready, initializing engines on demand...", flush=True)
 
+        # JS 端就绪，按需初始化引擎
+        print("[ModelManager] JS ready, initializing engines on demand...", flush=True)
+
         # 检查队列中是否有待处理的命令，只初始化需要的引擎
         if self._command_queue:
             # 只初始化队列中第一个命令需要的引擎
@@ -194,9 +191,14 @@ class ModelManager(QObject):
             console.log('[JS] Initializing {engine_type.value} engine...');
             window.initEngine('{engine_type.value}').then(function(result) {{
                 console.log('[JS] {engine_type.value} result:', JSON.stringify(result));
-                // 通过 QWebChannel 回传结果
+                // 通过 QWebChannel 回传结果 — 必须检查 result.success
                 if (window.modelManager) {{
-                    window.modelManager.onEngineReady('{engine_type.value}');
+                    if (result && result.success) {{
+                        window.modelManager.onEngineReady('{engine_type.value}');
+                    }} else {{
+                        window.modelManager.onEngineError('{engine_type.value}',
+                            result ? result.error : 'Unknown error');
+                    }}
                 }}
             }}).catch(function(error) {{
                 console.error('[JS] {engine_type.value} error:', error.message);
@@ -240,6 +242,9 @@ class ModelManager(QObject):
             if not ready:
                 self.engine_error.emit(engine_type.value, "Init timeout")
 
+        # 超时后仍然尝试处理队列中的命令（降级到 legacy 模式）
+        self._process_next_command()
+
     def switch_model(self, model_path, model_type):
         """
         切换模型（带队列和锁）
@@ -275,12 +280,22 @@ class ModelManager(QObject):
 
     def _execute_switch(self, model_path, model_type):
         """执行模型切换"""
+        # 双重检查引擎就绪状态
+        if not self.engines_ready.get(model_type):
+            self.is_switching = False
+            error_msg = f"{model_type.value} engine not ready"
+            print(f"[ModelManager] {error_msg}", flush=True)
+            self._set_state("error", error_msg)
+            self.model_load_error.emit(model_path, error_msg)
+            self._process_next_command()
+            return False
+
         self.is_switching = True
         self.load_start_time = time.time()
         self._set_state("loading", f"Loading {model_type.value}: {os.path.basename(model_path)}")
 
         # 启动超时检测
-        self.load_timeout_timer.start(15000)  # 15 秒超时
+        self.load_timeout_timer.start(60000)  # 60 秒超时（大模型文件 ~75MB）
 
         # 转换路径为绝对路径
         abs_model_path = self._resolve_model_path(model_path)
@@ -319,36 +334,27 @@ class ModelManager(QObject):
         if self._command_queue:
             model_path, model_type = self._command_queue.popleft()
             print(f"[ModelManager] Processing queued command: {model_path}", flush=True)
+
+            # 检查所需的引擎是否就绪，未就绪直接回传错误（避免经过 JS 的无效往返）
+            if not self.engines_ready.get(model_type):
+                error_msg = f"{model_type.value} engine not ready, cannot load model"
+                print(f"[ModelManager] {error_msg}", flush=True)
+                self._set_state("error", error_msg)
+                # 直接通过信号通知错误（不需要经过 JS）
+                self.model_load_error.emit(model_path, error_msg)
+                return
+
             self._execute_switch(model_path, model_type)
 
     def _resolve_model_path(self, model_path):
-        """将路径转换为 file:/// URL 格式"""
-        # 如果是相对路径，先转换为绝对路径
-        if not os.path.isabs(model_path):
-            # 获取 characters 目录
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            characters_dir = os.path.join(project_root, "characters")
-
-            # 尝试多种路径组合
-            candidates = [
-                os.path.join(characters_dir, model_path),
-                os.path.join(characters_dir, "assets", model_path),
-                model_path
-            ]
-
-            for path in candidates:
-                if os.path.exists(path):
-                    model_path = os.path.abspath(path)
-                    break
-
-        # 将 Windows 路径转换为 file:/// URL
-        if os.path.isabs(model_path):
-            url_path = model_path.replace('\\', '/')
-            if url_path.startswith('C:'):
-                url_path = '/' + url_path
-            return f'file:///{url_path}'
-
-        return model_path
+        """将模型路径转换为 Flask HTTP URL（替代 file:///，避免 WebAssembly 限制）"""
+        # model_path 格式为 "{character_id}/assets/model/{filename}"
+        normalized = model_path.replace('\\', '/')
+        if normalized.startswith('/'):
+            normalized = normalized.lstrip('/')
+        # URL 编码：中文 → UTF-8 百分号编码，空格 → %20，保留 / 分隔符
+        encoded = quote(normalized, safe='/')
+        return f'http://127.0.0.1:5000/characters/{encoded}'
 
     def _on_model_loaded(self, model_path, model_type, result):
         """模型加载完成回调"""
@@ -420,6 +426,16 @@ class ModelManager(QObject):
     def onEngineError(self, engine_type, error):
         """JS 端引擎错误回调"""
         print(f"[ModelManager] onEngineError called: {engine_type} - {error}", flush=True)
+        # 标记该引擎为错误状态
+        if engine_type in ['vrm', 'live2d']:
+            try:
+                et = ModelType(engine_type)
+                self.engines_ready[et] = False
+            except ValueError:
+                pass
+        # 发射引擎错误信号（WebEngineRenderer 监听后可触发降级）
+        self.engine_error.emit(engine_type, error)
+        self._process_next_command()
 
     # ========== 管理接口 ==========
 

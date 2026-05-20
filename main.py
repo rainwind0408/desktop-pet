@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QObject, pyqtSignal
 from gui import PetWindow
 from core import CharacterManager, MemorySystem, MusicAnalyzer
 from sensors import EnvironmentSensor, MediaSensor, MusicTracker
@@ -151,8 +152,12 @@ def main():
     window.set_character_manager(character_manager)
     print("Character manager set", flush=True)
 
-    # 注册回调：API 切换角色时刷新 GUI
-    api_server._on_character_switched = window.update_pet_display
+    # 注册回调：API 切换角色时刷新 GUI（通过信号桥接跨线程安全调用）
+    class _SignalBridge(QObject):
+        switch_character = pyqtSignal()
+    _bridge = _SignalBridge()
+    _bridge.switch_character.connect(window.update_pet_display)
+    api_server._on_character_switched = _bridge.switch_character.emit
 
     print("桌面宠物系统启动完成", flush=True)
     print(f"可用角色: {character_manager.get_available_characters()}")
