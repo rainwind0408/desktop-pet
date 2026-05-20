@@ -42,7 +42,9 @@
       "models": ["ernie-5.5", "ernie-5.5-turbo", "ernie-5.5-flash", "ernie-4.0", "ernie-3.5"],
       "default_model": "ernie-5.5-turbo",
       "api_base": "https://qianfan.baidubce.com/v2",
-      "fetched_at": "2026-05-19T00:00:00Z"
+      "fetched_at": "2026-05-19T00:00:00Z",
+      "fetch_status": "manual",
+      "unsupported_reason": "千帆 API 不提供标准 /v1/models 端点，需手动更新"
     },
     "minimax": {
       "models": ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"],

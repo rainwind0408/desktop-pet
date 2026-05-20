@@ -264,6 +264,28 @@ class UnifiedRenderer {
             return;
         }
 
+        // 检查 SDK 是否可用
+        if (typeof PIXI === 'undefined') {
+            throw new Error('PIXI not loaded');
+        }
+        if (!PIXI.live2d || !PIXI.live2d.Live2DModel) {
+            // 尝试等待 SDK 初始化
+            console.warn('[Renderer] PIXI.live2d.Live2DModel not ready, waiting...');
+            await new Promise((resolve, reject) => {
+                let attempts = 0;
+                const check = setInterval(() => {
+                    attempts++;
+                    if (PIXI.live2d && PIXI.live2d.Live2DModel) {
+                        clearInterval(check);
+                        resolve();
+                    } else if (attempts > 50) {  // 5 秒超时
+                        clearInterval(check);
+                        reject(new Error('Live2DModel not available (SDK not loaded correctly)'));
+                    }
+                }, 100);
+            });
+        }
+
         const container = document.getElementById('render-container');
         if (!container) {
             throw new Error('render-container not found');
@@ -410,6 +432,16 @@ class UnifiedRenderer {
         engine.scene.add(vrm.scene);
         engine.currentModel = vrm;
 
+        // 初始化动画控制器
+        if (typeof AnimationController !== 'undefined') {
+            if (engine.animCtrl) {
+                engine.animCtrl.dispose();
+            }
+            engine.animCtrl = new AnimationController(engine.scene, vrm);
+            engine.animCtrl.init();
+            console.log('[Renderer] AnimationController initialized for VRM');
+        }
+
         // 自动调整相机
         if (vrm.scene) {
             const box = new THREE.Box3().setFromObject(vrm.scene);
@@ -458,7 +490,21 @@ class UnifiedRenderer {
         } else {
             // 加载新模型
             this._updateStatus('Loading Live2D...');
-            model = await PIXI.live2d.Live2DModel.from(modelPath);
+            if (PIXI.live2d && PIXI.live2d.Live2DModel) {
+                console.log('[Renderer] Loading Live2D model via PIXI.live2d.Live2DModel');
+                model = await PIXI.live2d.Live2DModel.from(modelPath);
+            } else if (typeof window.Live2DModel !== 'undefined') {
+                console.log('[Renderer] Using window.Live2DModel fallback');
+                model = await window.Live2DModel.from(modelPath);
+            } else {
+                console.error('[Renderer] Live2D SDK check:', {
+                    PIXI: typeof PIXI,
+                    live2d: typeof PIXI !== 'undefined' ? typeof PIXI.live2d : 'N/A',
+                    Live2DModel: typeof PIXI !== 'undefined' && PIXI.live2d ? typeof PIXI.live2d.Live2DModel : 'N/A',
+                    window_Live2DModel: typeof window.Live2DModel
+                });
+                throw new Error('Live2DModel not available (SDK not loaded correctly)');
+            }
 
             // 存入缓存
             this.modelCache.set(cacheKey, model);
@@ -502,6 +548,13 @@ class UnifiedRenderer {
             // 更新控制器
             if (engine.controls) {
                 engine.controls.update();
+            }
+
+            // 更新骨骼动画 Mixer（优先使用 AnimationController）
+            if (engine.animCtrl) {
+                engine.animCtrl.update(0.016);
+            } else if (engine.mixer) {
+                engine.mixer.update(0.016);
             }
 
             // 更新 VRM 模型
@@ -574,6 +627,14 @@ class UnifiedRenderer {
         // 清理 VRM 引擎
         if (this.engines.vrm) {
             const engine = this.engines.vrm;
+            if (engine.animCtrl) {
+                engine.animCtrl.dispose();
+                engine.animCtrl = null;
+            }
+            if (engine.mixer) {
+                engine.mixer.stopAllAction();
+                engine.mixer = null;
+            }
             if (engine.currentModel && engine.currentModel.scene) {
                 engine.scene.remove(engine.currentModel.scene);
             }
@@ -662,7 +723,60 @@ window.addEventListener('resize', () => {
 
 // ========== 动画控制接口 ==========
 
-// 表情映射
+// ========== 角色级映射覆盖（由 Python 端设置） ==========
+window._characterOverrides = {
+    expressionMap: null,  // 语义名 → 模型实际表情名
+    motionMap: null       // 语义名 → { group, index }
+};
+
+/**
+ * 设置角色专属的表情/动作映射（覆盖默认值）
+ * @param {Object|null} expressionMap - { "happy": "Smile", "sad": "Sad", ... }
+ * @param {Object|null} motionMap - { "wave": { group: "TapBody", index: 0 }, ... }
+ */
+window.setCharacterOverrides = (expressionMap, motionMap) => {
+    window._characterOverrides.expressionMap = expressionMap || null;
+    window._characterOverrides.motionMap = motionMap || null;
+    console.log('[Animation] Character overrides set:', {
+        expressionMap: expressionMap ? Object.keys(expressionMap).length + ' entries' : 'null',
+        motionMap: motionMap ? Object.keys(motionMap).length + ' entries' : 'null'
+    });
+};
+
+// 获取有效的表情映射（优先角色级，回退默认）
+function getEffectiveExpressionMap() {
+    return window._characterOverrides.expressionMap || EXPRESSION_ONLY_MAP;
+}
+
+// 获取有效的 motion 映射（优先角色级，回退默认）
+function getEffectiveLive2DMotionMap() {
+    return window._characterOverrides.motionMap || LIVE2D_MOTION_MAP;
+}
+
+// ========== 语义名 → 执行方式映射 ==========
+const MOTION_MAP = {
+    'wave':        { type: 'skeletal', anim: 'wave' },
+    'nod_fast':    { type: 'skeletal', anim: 'nod_fast' },
+    'shake':       { type: 'skeletal', anim: 'shake' },
+    'bow':         { type: 'skeletal', anim: 'bow' },
+    'wave_arm':    { type: 'skeletal', anim: 'wave_arm' },
+    'greet':       { type: 'skeletal', anim: 'greet' },
+    'sit':         { type: 'skeletal', anim: 'sit' },
+    'wave_both':   { type: 'skeletal', anim: 'wave_both' },
+    'nod_slow':    { type: 'skeletal', anim: 'nod_slow' },
+    'head_tilt':   { type: 'skeletal', anim: 'head_tilt' },
+    'shrug':       { type: 'skeletal', anim: 'shoulder_shrug' },
+    'happy':       { type: 'expression', name: 'happy' },
+    'sad':         { type: 'expression', name: 'sad' },
+    'angry':       { type: 'expression', name: 'angry' },
+    'surprised':   { type: 'expression', name: 'surprised' },
+    'sleepy':      { type: 'expression', name: 'relaxed' },
+    'scared':      { type: 'expression', name: 'surprised' },
+    'sit_quietly': { type: 'skeletal', anim: 'sit' },
+    'think':       { type: 'expression', name: 'neutral' }
+};
+
+// 兼容旧代码的表情映射
 const expressionMap = {
     'happy': 'happy',
     'joy': 'happy',
@@ -673,14 +787,419 @@ const expressionMap = {
     'neutral': 'neutral'
 };
 
+// ========== Live2D Motion Group 映射 ==========
+const LIVE2D_MOTION_MAP = {
+    'wave':        { group: 'TapBody', index: 0 },
+    'nod_fast':    { group: 'TapBody', index: 0 },
+    'shake':       { group: 'TapBody', index: 1 },
+    'bow':         { group: 'TapBody', index: 0 },
+    'wave_arm':    { group: 'TapBody', index: 0 },
+    'greet':       { group: 'TapBody', index: 0 },
+    'happy':       { group: 'TapBody', index: 0 },
+    'sad':         { group: 'TapBody', index: 1 },
+    'angry':       { group: 'TapBody', index: 2 },
+    'surprised':   { group: 'TapBody', index: 1 },
+    'sleepy':      { group: 'Idle',    index: 0 },
+    'scared':      { group: 'TapBody', index: 2 },
+    'sit_quietly': { group: 'Idle',    index: 0 },
+    'think':       { group: 'Idle',    index: 0 }
+};
+
+// ========== 纯表情模型映射（无 motion 文件时使用） ==========
+const EXPRESSION_ONLY_MAP = {
+    'wave':        'happy',
+    'nod_fast':    'happy',
+    'shake':       'surprised',
+    'bow':         'happy',
+    'wave_arm':    'happy',
+    'greet':       'happy',
+    'happy':       'happy',
+    'sad':         'sad',
+    'angry':       'angry',
+    'surprised':   'surprised',
+    'sleepy':      'relaxed',
+    'scared':      'surprised',
+    'sit_quietly': 'relaxed',
+    'think':       'neutral'
+};
+
+// ========== VRM 程序化骨骼动画库 ==========
+const SKELETAL_ANIMATIONS = {
+    wave: {
+        duration: 2.0,
+        bones: [{
+            name: 'leftUpperArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.3, z: -0.8 },
+                { time: 0.6, z: -0.3 },
+                { time: 0.9, z: -0.8 },
+                { time: 1.2, z: -0.3 },
+                { time: 1.5, z: -0.8 },
+                { time: 2.0, z: 0 }
+            ]
+        }, {
+            name: 'leftLowerArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.3, z: -0.5 },
+                { time: 0.6, z: -0.2 },
+                { time: 0.9, z: -0.5 },
+                { time: 1.2, z: -0.2 },
+                { time: 1.5, z: -0.5 },
+                { time: 2.0, z: 0 }
+            ]
+        }]
+    },
+
+    nod_fast: {
+        duration: 1.0,
+        bones: [{
+            name: 'head',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 0.15, x: 0.25 },
+                { time: 0.3, x: 0 },
+                { time: 0.45, x: 0.25 },
+                { time: 0.6, x: 0 },
+                { time: 0.75, x: 0.15 },
+                { time: 1.0, x: 0 }
+            ]
+        }]
+    },
+
+    shake: {
+        duration: 1.5,
+        bones: [{
+            name: 'head',
+            keys: [
+                { time: 0.0, y: 0 },
+                { time: 0.2, y: 0.2 },
+                { time: 0.4, y: -0.2 },
+                { time: 0.6, y: 0.15 },
+                { time: 0.8, y: -0.15 },
+                { time: 1.0, y: 0.08 },
+                { time: 1.2, y: -0.08 },
+                { time: 1.5, y: 0 }
+            ]
+        }]
+    },
+
+    bow: {
+        duration: 2.5,
+        bones: [{
+            name: 'spine',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 0.8, x: 0.4 },
+                { time: 1.5, x: 0.4 },
+                { time: 2.5, x: 0 }
+            ]
+        }]
+    },
+
+    wave_arm: {
+        duration: 2.0,
+        bones: [{
+            name: 'rightUpperArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.4, z: 0.8 },
+                { time: 0.8, z: 0.4 },
+                { time: 1.2, z: 0.8 },
+                { time: 1.6, z: 0.4 },
+                { time: 2.0, z: 0 }
+            ]
+        }]
+    },
+
+    greet: {
+        duration: 2.0,
+        bones: [{
+            name: 'spine',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 0.5, x: 0.15 },
+                { time: 1.5, x: 0.15 },
+                { time: 2.0, x: 0 }
+            ]
+        }]
+    },
+
+    sit: {
+        duration: 2.0,
+        bones: [{
+            name: 'leftUpperLeg',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 1.0, x: -1.2 },
+                { time: 2.0, x: -1.2 }
+            ]
+        }, {
+            name: 'rightUpperLeg',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 1.0, x: -1.2 },
+                { time: 2.0, x: -1.2 }
+            ]
+        }, {
+            name: 'leftLowerLeg',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 1.0, x: 1.5 },
+                { time: 2.0, x: 1.5 }
+            ]
+        }, {
+            name: 'rightLowerLeg',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 1.0, x: 1.5 },
+                { time: 2.0, x: 1.5 }
+            ]
+        }, {
+            name: 'spine',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 1.0, x: -0.1 },
+                { time: 2.0, x: -0.1 }
+            ]
+        }]
+    },
+
+    wave_both: {
+        duration: 2.5,
+        bones: [{
+            name: 'leftUpperArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.3, z: -0.9 },
+                { time: 0.7, z: -0.4 },
+                { time: 1.1, z: -0.9 },
+                { time: 1.5, z: -0.4 },
+                { time: 1.9, z: -0.9 },
+                { time: 2.5, z: 0 }
+            ]
+        }, {
+            name: 'rightUpperArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.5, z: 0.9 },
+                { time: 0.9, z: 0.4 },
+                { time: 1.3, z: 0.9 },
+                { time: 1.7, z: 0.4 },
+                { time: 2.1, z: 0.9 },
+                { time: 2.5, z: 0 }
+            ]
+        }]
+    },
+
+    nod_slow: {
+        duration: 2.0,
+        bones: [{
+            name: 'head',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 0.6, x: 0.15 },
+                { time: 1.0, x: 0 },
+                { time: 1.4, x: 0.15 },
+                { time: 2.0, x: 0 }
+            ]
+        }]
+    },
+
+    head_tilt: {
+        duration: 2.0,
+        bones: [{
+            name: 'head',
+            keys: [
+                { time: 0.0, x: 0, z: 0 },
+                { time: 0.5, x: 0.1, z: 0.2 },
+                { time: 1.5, x: 0.1, z: 0.2 },
+                { time: 2.0, x: 0, z: 0 }
+            ]
+        }]
+    },
+
+    shoulder_shrug: {
+        duration: 2.0,
+        bones: [{
+            name: 'leftUpperArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.4, z: -0.3 },
+                { time: 1.2, z: -0.3 },
+                { time: 2.0, z: 0 }
+            ]
+        }, {
+            name: 'rightUpperArm',
+            keys: [
+                { time: 0.0, z: 0 },
+                { time: 0.4, z: 0.3 },
+                { time: 1.2, z: 0.3 },
+                { time: 2.0, z: 0 }
+            ]
+        }, {
+            name: 'spine',
+            keys: [
+                { time: 0.0, x: 0 },
+                { time: 0.4, x: -0.05 },
+                { time: 1.2, x: -0.05 },
+                { time: 2.0, x: 0 }
+            ]
+        }]
+    }
+};
+
 // 空闲动画定时器
 let _idleInterval = null;
 let _idleMs = 5000;
 
+// ========== VRM 骨骼动画播放器 ==========
+function playSkeletalAnimation(vrm, bones, duration) {
+    if (!vrm || !vrm.scene) return;
+
+    // 获取或创建 AnimationMixer
+    let mixer = null;
+    const engine = window.renderer && window.renderer.engines && window.renderer.engines.vrm;
+    if (engine) {
+        if (!engine.mixer) {
+            engine.mixer = new THREE.AnimationMixer(vrm.scene);
+        }
+        mixer = engine.mixer;
+    }
+    if (!mixer) return;
+
+    // 停止当前所有动画
+    mixer.stopAllAction();
+
+    const tracks = [];
+    bones.forEach(function(boneConfig) {
+        const boneNode = vrm.humanoid
+            ? vrm.humanoid.getNormalizedBoneNode(boneConfig.name)
+            : null;
+        if (!boneNode) return;
+
+        const times = [];
+        const values = [];
+        boneConfig.keys.forEach(function(key) {
+            times.push(key.time);
+            // 使用四元数：将欧拉角转换为四元数
+            const euler = new THREE.Euler(
+                key.x || 0,
+                key.y || 0,
+                key.z || 0,
+                'XYZ'
+            );
+            const quat = new THREE.Quaternion().setFromEuler(euler);
+            values.push(quat.x, quat.y, quat.z, quat.w);
+        });
+
+        const track = new THREE.QuaternionKeyframeTrack(
+            boneNode.name + '.quaternion',
+            times,
+            values
+        );
+        tracks.push(track);
+    });
+
+    if (tracks.length === 0) return;
+
+    const clip = new THREE.AnimationClip('procedural_' + Date.now(), duration, tracks);
+    const action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopOnce);
+    action.clampWhenFinished = true;
+    action.play();
+
+    // 动画结束后重置姿态
+    setTimeout(function() {
+        action.stop();
+        bones.forEach(function(boneConfig) {
+            const boneNode = vrm.humanoid
+                ? vrm.humanoid.getNormalizedBoneNode(boneConfig.name)
+                : null;
+            if (boneNode) {
+                boneNode.quaternion.identity();
+            }
+        });
+    }, duration * 1000 + 50);
+}
+
+// ========== Live2D Motion 播放（带映射） ==========
+function playLive2DMotion(model, name) {
+    if (!model) return;
+
+    // 检测是否为纯表情模型（无 motion 定义）
+    let isExpressionOnly = false;
+    try {
+        const mm = model.internalModel && model.internalModel.motionManager;
+        if (!mm || !mm.definitions || Object.keys(mm.definitions).length === 0) {
+            isExpressionOnly = true;
+        }
+    } catch (e) {
+        isExpressionOnly = true;
+    }
+
+    if (isExpressionOnly) {
+        // 纯表情模型：通过表情驱动（优先角色级映射）
+        const exprMap = getEffectiveExpressionMap();
+        const expr = exprMap[name] || 'happy';
+        try {
+            model.expression(expr);
+            setTimeout(function() {
+                try { model.expression(''); } catch(e) {}
+            }, 2500);
+            console.log('[Animation] Live2D expression-only:', expr);
+        } catch (e) {
+            console.warn('[Animation] Live2D expression-only error:', e.message);
+        }
+        return;
+    }
+
+    // 正常 motion 播放（优先角色级映射）
+    const mapping = getEffectiveLive2DMotionMap()[name];
+    if (!mapping) {
+        // 没有映射，尝试表情降级
+        tryLive2DExpressionFallback(model, name);
+        return;
+    }
+
+    try {
+        model.motion(mapping.group, mapping.index);
+        console.log('[Animation] Live2D motion:', mapping.group, mapping.index);
+    } catch (e) {
+        console.warn('[Animation] Live2D motion error:', e.message);
+        tryLive2DExpressionFallback(model, name);
+    }
+}
+
+// Live2D 表情降级
+function tryLive2DExpressionFallback(model, name) {
+    const exprMap = getEffectiveExpressionMap();
+    const fallbackNames = {
+        'happy': 'happy', 'joy': 'happy',
+        'sad': 'sad', 'upset': 'sad',
+        'surprised': 'surprised', 'scared': 'surprised',
+        'angry': 'angry',
+        'sleepy': 'relaxed', 'sit_quietly': 'relaxed',
+        'think': 'neutral'
+    };
+    const semanticName = fallbackNames[name] || name;
+    const expr = exprMap[semanticName] || exprMap[name];
+    if (!expr) return;
+    try {
+        model.expression(expr);
+        setTimeout(function() {
+            try { model.expression(''); } catch(e) {}
+        }, 2000);
+    } catch (e) {
+        console.warn('[Animation] Live2D expression fallback error:', e.message);
+    }
+}
+
 /**
  * 播放动作/表情
- * @param {string} name - 动作名称
- * @param {string} group - 动作组（Live2D 用）
+ * @param {string} name - 动作名称（语义名）
+ * @param {string} group - 动作组（Live2D 用，可选）
  */
 window.playMotion = (name, group) => {
     console.log('[Animation] playMotion:', name, group || '');
@@ -688,33 +1207,46 @@ window.playMotion = (name, group) => {
     const renderer = window.renderer;
     if (!renderer) return;
 
-    // VRM 表情支持
+    // Fallback 头像动画反应
+    if (typeof fallbackReaction === 'function') {
+        fallbackReaction(name);
+    }
+
+    // VRM 骨骼动画 + 表情
     if (renderer.engines.vrm && renderer.engines.vrm.currentModel) {
         const vrm = renderer.engines.vrm.currentModel;
-        if (vrm.expressionManager) {
-            const expression = expressionMap[name] || name;
-            try {
-                vrm.expressionManager.setValue(expression, 1.0);
-                setTimeout(() => {
-                    vrm.expressionManager.setValue(expression, 0);
-                }, 1500);
-                console.log('[Animation] VRM expression:', expression);
-            } catch (e) {
-                console.warn('[Animation] VRM expression error:', e.message);
+        const animCtrl = renderer.engines.vrm.animCtrl;
+
+        // 优先使用外部动画文件
+        if (animCtrl && animCtrl.clipCache.has(name)) {
+            animCtrl.play(name);
+            console.log('[Animation] VRM external anim:', name);
+        } else {
+            // 回退到程序化动画
+            const mapping = MOTION_MAP[name] || MOTION_MAP['happy'];
+
+            if (mapping.type === 'skeletal' && SKELETAL_ANIMATIONS[mapping.anim]) {
+                const anim = SKELETAL_ANIMATIONS[mapping.anim];
+                playSkeletalAnimation(vrm, anim.bones, anim.duration);
+                console.log('[Animation] VRM skeletal:', mapping.anim);
+            }
+            if (mapping.type === 'expression' && vrm.expressionManager) {
+                try {
+                    vrm.expressionManager.setValue(mapping.name, 1.0);
+                    setTimeout(() => {
+                        vrm.expressionManager.setValue(mapping.name, 0);
+                    }, 2000);
+                    console.log('[Animation] VRM expression:', mapping.name);
+                } catch (e) {
+                    console.warn('[Animation] VRM expression error:', e.message);
+                }
             }
         }
     }
 
-    // Live2D 动作支持
+    // Live2D 动作（使用映射）
     if (renderer.engines.live2d && renderer.engines.live2d.currentModel) {
-        const model = renderer.engines.live2d.currentModel;
-        try {
-            const motionGroup = group || 'TapBody';
-            model.motion(motionGroup);
-            console.log('[Animation] Live2D motion:', motionGroup);
-        } catch (e) {
-            console.warn('[Animation] Live2D motion error:', e.message);
-        }
+        playLive2DMotion(renderer.engines.live2d.currentModel, name);
     }
 };
 
@@ -838,6 +1370,46 @@ window.setModelScale = (scale) => {
     }
 
     console.log('[Animation] Model scale:', scale);
+};
+
+/**
+ * 加载动画文件（由 Python 端调用）
+ * @param {Object} animConfig - { "idle": "idle.glb", "walk": "walk.bvh", ... }
+ * @param {string} baseUrl - 动画文件所在目录的 URL
+ * @returns {Promise<number>} 成功加载的数量
+ */
+window.loadAnimations = async (animConfig, baseUrl) => {
+    const renderer = window.renderer;
+    if (!renderer || !renderer.engines.vrm || !renderer.engines.vrm.animCtrl) {
+        console.warn('[Animation] No VRM AnimationController available');
+        return 0;
+    }
+    const count = await renderer.engines.vrm.animCtrl.loadAll(animConfig, baseUrl);
+    console.log('[Animation] Loaded', count, 'animations from', baseUrl);
+    return count;
+};
+
+/**
+ * 停止当前动画
+ * @param {number} fadeOut - 淡出时间（秒）
+ */
+window.stopAnimation = (fadeOut) => {
+    const renderer = window.renderer;
+    if (!renderer || !renderer.engines.vrm || !renderer.engines.vrm.animCtrl) return;
+    renderer.engines.vrm.animCtrl.stop(fadeOut || 0);
+};
+
+/**
+ * 获取动画系统状态
+ * @returns {Object}
+ */
+window.getAnimationStats = () => {
+    const renderer = window.renderer;
+    const stats = { external: null, procedural: Object.keys(SKELETAL_ANIMATIONS) };
+    if (renderer && renderer.engines.vrm && renderer.engines.vrm.animCtrl) {
+        stats.external = renderer.engines.vrm.animCtrl.getCacheStats();
+    }
+    return stats;
 };
 
 console.log('[Renderer] Animation controls loaded');

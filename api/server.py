@@ -75,7 +75,8 @@ class APIServer:
                 profile = self.character_manager.switch_character(character_id)
                 if self._on_character_switched:
                     try:
-                        self._on_character_switched()
+                        from PyQt5.QtCore import QTimer
+                        QTimer.singleShot(0, self._on_character_switched)
                     except Exception:
                         pass
                 return jsonify(profile)

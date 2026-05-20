@@ -13,7 +13,16 @@ import requests
 
 # 配置文件路径
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "model_cache.json")
+LOG_PATH = os.path.join(os.path.dirname(__file__), "update_log.json")
 UPDATE_INTERVAL_HOURS = 720  # 30 天
+
+# 不支持标准 /v1/models 接口的提供商（已知）
+UNSUPPORTED_PROVIDERS = {
+    "baidu": "千帆 API 不提供标准 /v1/models 端点",
+}
+
+# 日志最大保留条数
+MAX_LOG_RECORDS = 50
 
 
 def get_cache_path() -> str:
@@ -63,15 +72,20 @@ def is_update_needed(cache: Optional[Dict] = None) -> bool:
         return True
 
 
-def fetch_models(provider_key: str, api_base: str, api_key: str = "") -> List[str]:
+def fetch_models(provider_key: str, api_base: str, api_key: str = "") -> Optional[List[str]]:
     """
     从厂商 API 获取模型列表
     
     :param provider_key: 提供商标识
     :param api_base: API 基础 URL
     :param api_key: API 密钥（可选）
-    :return: 模型名称列表
+    :return: 模型名称列表，None 表示该厂商不支持标准接口
     """
+    # 预判：已知不支持标准接口的厂商直接跳过
+    if provider_key in UNSUPPORTED_PROVIDERS:
+        print(f"跳过 {provider_key}: {UNSUPPORTED_PROVIDERS[provider_key]}")
+        return None
+
     models = []
     
     try:
@@ -145,7 +159,7 @@ def compare_models(old_list: List[str], new_list: List[str]) -> Tuple[List[str],
 
 
 def sync_provider(provider_key: str, api_base: str, api_key: str = "", 
-                  default_model: str = "") -> Dict:
+                  default_model: str = "") -> Optional[Dict]:
     """
     同步单个提供商的模型列表
     
@@ -153,46 +167,65 @@ def sync_provider(provider_key: str, api_base: str, api_key: str = "",
     :param api_base: API 基础 URL
     :param api_key: API 密钥
     :param default_model: 默认模型
-    :return: 同步后的提供商配置
+    :return: 同步后的提供商配置，None 表示该厂商不支持接口直接跳过
     """
     # 获取当前缓存中的模型列表
     cache = load_cache()
     providers = cache.get("providers", {})
     existing = providers.get(provider_key, {})
     old_models = existing.get("models", [])
-    
+
     # 拉取新模型列表
     new_models = fetch_models(provider_key, api_base, api_key)
-    
-    # 如果拉取失败，使用旧列表或默认值
+
+    # fetch_models 返回 None 表示厂商不支持标准接口
+    if new_models is None:
+        print(f"  {provider_key}: 不支持标准接口，标记为仅手动更新")
+        result = {
+            "models": old_models if old_models else [],
+            "default_model": default_model or existing.get("default_model", ""),
+            "api_base": api_base,
+            "fetched_at": existing.get("fetched_at", ""),
+            "fetch_status": "manual",
+            "unsupported_reason": UNSUPPORTED_PROVIDERS.get(provider_key, "")
+        }
+        return result
+
+    # 如果拉取失败（空列表且无缓存），使用旧列表或默认值
     if not new_models:
         if old_models:
-            print(f"拉取 {provider_key} 失败，保留旧模型列表")
-            return existing
+            print(f"  拉取 {provider_key} 失败，保留旧模型列表")
+            result = dict(existing)
+            result["fetch_status"] = "failed"
+            return result
         else:
-            print(f"拉取 {provider_key} 失败且无缓存，使用空列表")
+            print(f"  拉取 {provider_key} 失败且无缓存，使用空列表")
             return {
                 "models": [],
                 "default_model": default_model,
                 "api_base": api_base,
-                "fetched_at": datetime.now(timezone.utc).isoformat()
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "fetch_status": "failed"
             }
-    
+
     # 对比差异
     added, removed = compare_models(old_models, new_models)
-    
+
     if added or removed:
-        print(f"[{provider_key}] 模型变更: +{len(added)} 新增, -{len(removed)} 移除")
+        print(f"  [{provider_key}] 模型变更: +{len(added)} 新增, -{len(removed)} 移除")
         if added:
-            print(f"  新增: {', '.join(added)}")
+            print(f"    新增: {', '.join(added)}")
         if removed:
-            print(f"  移除: {', '.join(removed)}")
-    
+            print(f"    移除: {', '.join(removed)}")
+
     return {
         "models": new_models,
         "default_model": default_model if default_model else existing.get("default_model", ""),
         "api_base": api_base,
-        "fetched_at": datetime.now(timezone.utc).isoformat()
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetch_status": "success",
+        "added": added or [],
+        "removed": removed or []
     }
 
 
@@ -204,41 +237,159 @@ def sync_all_providers(provider_presets: Dict, provider_configs: Dict) -> bool:
     :param provider_configs: 用户配置（包含 api_key）
     :return: 是否同步成功
     """
-    print("开始同步所有提供商模型列表...")
-    
+    print("\n[模型更新] 开始同步提供商模型列表...")
+
     cache = load_cache()
     providers = cache.get("providers", {})
-    
+
+    # 收集结果用于日志和内存刷新
+    results = {
+        "success": {},
+        "skipped": {},
+        "failed": {}
+    }
+
     for key, preset in provider_presets.items():
         if key == "custom":
             # 自定义提供商跳过，由用户自行管理
+            results["skipped"][key] = "自定义提供商"
             continue
-        
+
         api_base = preset.get("api_base", "")
         default_model = preset.get("default_model", "")
         user_config = provider_configs.get(key, {})
         api_key = user_config.get("api_key", "")
-        
-        print(f"同步 {key} ({preset.get('name', key)})...")
+
+        # 无 API Key 且不在 UNSUPPORTED_PROVIDERS 中的厂商，跳过
+        if not api_key and key not in UNSUPPORTED_PROVIDERS:
+            print(f"  ⏭️ {key} ({preset.get('name', key)}): 未配置 API Key，跳过")
+            results["skipped"][key] = "未配置 API Key"
+            continue
+
+        print(f"  同步 {key} ({preset.get('name', key)})...")
         result = sync_provider(key, api_base, api_key, default_model)
-        
+
         if result:
             providers[key] = result
+            status = result.get("fetch_status", "unknown")
+            if status == "manual":
+                results["skipped"][key] = result.get("unsupported_reason", "不支持标准接口")
+            elif status == "failed":
+                results["failed"][key] = "API 调用失败"
+            else:
+                results["success"][key] = {
+                    "added": result.get("added", []),
+                    "removed": result.get("removed", [])
+                }
         else:
-            print(f"  同步失败，保留旧配置")
-    
+            print(f"    ❌ 同步失败，保留旧配置")
+            results["failed"][key] = "同步返回空"
+
     # 更新缓存
     cache["providers"] = providers
     cache["last_update"] = datetime.now(timezone.utc).isoformat()
     cache["update_interval_hours"] = UPDATE_INTERVAL_HOURS
-    
+
     success = save_cache(cache)
-    if success:
-        print("模型缓存更新完成")
-    else:
-        print("模型缓存保存失败")
-    
+
+    # v2: 同步完成后刷新内存并记录日志
+    _refresh_after_sync(results)
+
     return success
+
+
+def _refresh_after_sync(results: Dict):
+    """同步完成后刷新内存中的模型列表，写入更新日志"""
+    # 延迟导入避免循环依赖
+    try:
+        from .factory import reload_models
+        reload_models()
+        print("[模型更新] 内存模型列表已刷新")
+    except ImportError:
+        pass  # factory 未就绪时跳过
+
+    # 写入更新日志
+    _write_update_log(results)
+
+    # 输出变更摘要
+    _print_update_summary(results)
+
+
+def _write_update_log(results: Dict):
+    """将更新详情写入 update_log.json"""
+    try:
+        log_data = {"records": []}
+        if os.path.exists(LOG_PATH):
+            try:
+                with open(LOG_PATH, 'r', encoding='utf-8') as f:
+                    log_data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "auto_update",
+            "summary": (
+                f"同步完成: {len(results['success'])} 成功, "
+                f"{len(results['skipped'])} 跳过, "
+                f"{len(results['failed'])} 失败"
+            ),
+            "details": {
+                "success": results["success"],
+                "skipped": results["skipped"],
+                "failed": results["failed"]
+            }
+        }
+
+        records = log_data.get("records", [])
+        records.insert(0, record)
+
+        # 保留最近 N 条记录
+        if len(records) > MAX_LOG_RECORDS:
+            records = records[:MAX_LOG_RECORDS]
+
+        log_data["records"] = records
+
+        with open(LOG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(log_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[模型更新] 写入更新日志失败: {e}")
+
+
+def _print_update_summary(results: Dict):
+    """输出更新摘要到控制台"""
+    total_success = len(results["success"])
+    total_skipped = len(results["skipped"])
+    total_failed = len(results["failed"])
+
+    # 详细输出
+    if results["success"]:
+        for key, detail in results["success"].items():
+            added = detail.get("added", [])
+            removed = detail.get("removed", [])
+            if added or removed:
+                parts = []
+                if added:
+                    parts.append(f"+{len(added)} 新增 ({', '.join(added[:3])}{'...' if len(added) > 3 else ''})")
+                if removed:
+                    parts.append(f"-{len(removed)} 移除 ({', '.join(removed[:3])}{'...' if len(removed) > 3 else ''})")
+                print(f"    ✅ {key}: {', '.join(parts)}")
+            else:
+                print(f"    ✅ {key}: 无变更")
+
+    if results["skipped"]:
+        for key, reason in results["skipped"].items():
+            if isinstance(reason, dict):
+                reason = reason.get("unsupported_reason", "跳过")
+            print(f"    ⏭️ {key}: {reason}")
+
+    if results["failed"]:
+        for key, reason in results["failed"].items():
+            print(f"    ❌ {key}: {reason}")
+
+    print(f"\n[模型更新] 完成: {total_success} 成功, {total_skipped} 跳过, {total_failed} 失败")
+    if total_success + total_failed > 0:
+        print("[模型更新] 新模型列表下次打开设置时生效")
 
 
 def start_background_updater(provider_presets: Dict, provider_configs: Dict, 

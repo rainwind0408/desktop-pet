@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>初音未来</title>
+
+<!-- Live2D SDK (本地) — 加载顺序必须正确 -->
+<script src="../../../static/sdk/live2dcubismcore.min.js"></script>
+<script src="../../../static/sdk/cubism4.min.js"></script>
+<script src="../../../static/sdk/pixi.min.js"></script>
+<script src="../../../static/sdk/pixi-live2d-display.min.js"></script>
+
+<!-- Three.js + VRM SDK (本地, 兼容版本: three@0.146.0 + three-vrm@1.0.6) -->
+<script src="../../../static/sdk/three.min.js"></script>
+<script src="../../../static/sdk/GLTFLoader.js"></script>
+<script src="../../../static/sdk/OrbitControls.js"></script>
+<script src="../../../static/sdk/three-vrm.min.js"></script>
+
+<!-- 动画控制器 -->
+<script src="../../../static/js/animation_controller.js"></script>
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #e0f7fa;
+}
+#model-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: block;
+}
+#fallback-view {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    font-family: "Microsoft YaHei", sans-serif;
+    color: #555;
+    background: #e0f7fa;
+}
+#fallback-avatar {
+    width: 120px; height: 120px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #b2ebf2 0%, #80deea 50%, #4dd0e1 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 60px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+    animation: float 3s ease-in-out infinite, pulse 2s ease-in-out infinite;
+    cursor: pointer;
+    user-select: none;
+}
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-12px); }
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+#fallback-name {
+    margin-top: 12px;
+    font-size: 16px;
+    font-weight: bold;
+    color: #444;
+}
+#status-bar {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: rgba(0,0,0,0.4);
+    pointer-events: none;
+    z-index: 10;
+}
+#debug-console {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    right: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 9px;
+    font-family: Consolas, monospace;
+    color: #333;
+    background: rgba(255,255,255,0.85);
+    border-radius: 4px;
+    padding: 4px 6px;
+    z-index: 20;
+    pointer-events: none;
+    line-height: 1.4;
+}
+#debug-console .err { color: #c00; }
+#debug-console .info { color: #06a; }
+</style>
+</head>
+<body>
+
+<div id="static-indicator" style="position:absolute;top:0;left:0;right:0;height:30px;background:#00acc1;color:white;font-size:11px;text-align:center;line-height:30px;z-index:100;">HTML Loaded - Waiting for scripts...</div>
+
+<canvas id="model-canvas"></canvas>
+
+<div id="fallback-view">
+    <div id="fallback-avatar" title="点击互动">🎤</div>
+    <div id="fallback-name"></div>
+</div>
+
+<div id="status-bar">Ready</div>
+<div id="debug-console"></div>
+
+<script>
+// ========== 调试控制台 ==========
+(function() {
+    var dc = document.getElementById('debug-console');
+    function addLog(type, args) {
+        var line = document.createElement('div');
+        line.className = type;
+        var text = Array.prototype.slice.call(args).map(function(a) {
+            if (typeof a === 'object') {
+                try { return JSON.stringify(a); } catch(e) { return String(a); }
+            }
+            return String(a);
+        }).join(' ');
+        line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + text;
+        dc.appendChild(line);
+        dc.scrollTop = dc.scrollHeight;
+    }
+    var origLog = console.log;
+    var origErr = console.error;
+    var origWarn = console.warn;
+    console.log = function() { origLog.apply(console, arguments); addLog('info', arguments); };
+    console.error = function() { origErr.apply(console, arguments); addLog('err', arguments); };
+    console.warn = function() { origWarn.apply(console, arguments); addLog('err', arguments); };
+    window.onerror = function(msg, url, line, col, err) {
+        addLog('err', ['JS Error: ' + msg + ' (line ' + line + ')']);
+    };
+})();
+
+document.getElementById('static-indicator').textContent = 'Scripts loaded - Checking SDK...';
+console.log('Page loaded, SDK check:', {
+    THREE: typeof THREE !== 'undefined',
+    THREE_VRM: typeof THREE_VRM !== 'undefined',
+    GLTFLoader: typeof THREE !== 'undefined' && typeof THREE.GLTFLoader !== 'undefined',
+    OrbitControls: typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined',
+    PIXI: typeof PIXI !== 'undefined',
+    Live2DModel: typeof PIXI !== 'undefined' && PIXI.live2d && typeof PIXI.live2d.Live2DModel !== 'undefined'
+});
+
+// ========== 全局变量 ==========
+var _bridge = null;
+var _characterConfig = {
+    name: '初音未来',
+    avatar: '🎤',
+    modelPath: 'model/miku.vrm',
+    styleType: 'vrm',
+    scale: 1.0
+};
+var _modelScale = 1.0;
+var _idleInterval = null;
+var _idleMs = 5000;
+var _currentMotion = null;
+var _emojis = ['🎤', '🎵', '🎶', '💚', '✨', '🌟', '🎀', '💫', '🎹', '🎸'];
+
+// Three.js
+var _threeScene = null;
+var _threeCamera = null;
+var _threeRenderer = null;
+var _threeModel = null;
+var _threeClock = null;
+var _threeAnimationId = null;
+
+// Live2D
+var _pixiApp = null;
+var _live2dModel = null;
+
+// Animation Mixer (VRM)
+var _threeMixer = null;
+var _animCtrl = null;
+
+// ========== 语义名 → 执行方式映射 ==========
+var MOTION_MAP = {
+    'wave':        { type: 'skeletal', anim: 'wave' },
+    'nod_fast':    { type: 'skeletal', anim: 'nod_fast' },
+    'shake':       { type: 'skeletal', anim: 'shake' },
+    'bow':         { type: 'skeletal', anim: 'bow' },
+    'wave_arm':    { type: 'skeletal', anim: 'wave_arm' },
+    'greet':       { type: 'skeletal', anim: 'greet' },
+    'sit':         { type: 'skeletal', anim: 'sit' },
+    'wave_both':   { type: 'skeletal', anim: 'wave_both' },
+    'nod_slow':    { type: 'skeletal', anim: 'nod_slow' },
+    'head_tilt':   { type: 'skeletal', anim: 'head_tilt' },
+    'shrug':       { type: 'skeletal', anim: 'shoulder_shrug' },
+    'happy':       { type: 'expression', name: 'happy' },
+    'sad':         { type: 'expression', name: 'sad' },
+    'angry':       { type: 'expression', name: 'angry' },
+    'surprised':   { type: 'expression', name: 'surprised' },
+    'sleepy':      { type: 'expression', name: 'relaxed' },
+    'scared':      { type: 'expression', name: 'surprised' },
+    'sit_quietly': { type: 'skeletal', anim: 'sit' },
+    'think':       { type: 'expression', name: 'neutral' }
+};
+
+var LIVE2D_MOTION_MAP = {
+    'wave':        { group: 'TapBody', index: 0 },
+    'nod_fast':    { group: 'TapBody', index: 0 },
+    'shake':       { group: 'TapBody', index: 1 },
+    'bow':         { group: 'TapBody', index: 0 },
+    'wave_arm':    { group: 'TapBody', index: 0 },
+    'greet':       { group: 'TapBody', index: 0 },
+    'happy':       { group: 'TapBody', index: 0 },
+    'sad':         { group: 'TapBody', index: 1 },
+    'angry':       { group: 'TapBody', index: 2 },
+    'surprised':   { group: 'TapBody', index: 1 },
+    'sleepy':      { group: 'Idle',    index: 0 },
+    'scared':      { group: 'TapBody', index: 2 },
+    'sit_quietly': { group: 'Idle',    index: 0 },
+    'think':       { group: 'Idle',    index: 0 }
+};
+
+var EXPRESSION_ONLY_MAP = {
+    'wave': 'happy', 'nod_fast': 'happy', 'shake': 'surprised',
+    'bow': 'happy', 'wave_arm': 'happy', 'greet': 'happy',
+    'happy': 'happy', 'sad': 'sad', 'angry': 'angry',
+    'surprised': 'surprised', 'sleepy': 'relaxed',
+    'scared': 'surprised', 'sit_quietly': 'relaxed', 'think': 'neutral'
+};
+
+// 角色级覆盖（由 Python 端注入）
+var _characterExpressionMap = null;
+var _characterMotionMap = null;
+
+function setCharacterOverrides(expressionMap, motionMap) {
+    _characterExpressionMap = expressionMap;
+    _characterMotionMap = motionMap;
+    console.log('Character overrides set');
+}
+
+function getEffectiveExpressionMap() {
+    return _characterExpressionMap || EXPRESSION_ONLY_MAP;
+}
+
+function getEffectiveLive2DMotionMap() {
+    return _characterMotionMap || LIVE2D_MOTION_MAP;
+}
+
+var SKELETAL_ANIMATIONS = {
+    wave: { duration: 2.0, bones: [
+        { name: 'leftUpperArm', keys: [{time:0,z:0},{time:0.3,z:-0.8},{time:0.6,z:-0.3},{time:0.9,z:-0.8},{time:1.2,z:-0.3},{time:1.5,z:-0.8},{time:2.0,z:0}] },
+        { name: 'leftLowerArm', keys: [{time:0,z:0},{time:0.3,z:-0.5},{time:0.6,z:-0.2},{time:0.9,z:-0.5},{time:1.2,z:-0.2},{time:1.5,z:-0.5},{time:2.0,z:0}] }
+    ]},
+    nod_fast: { duration: 1.0, bones: [
+        { name: 'head', keys: [{time:0,x:0},{time:0.15,x:0.25},{time:0.3,x:0},{time:0.45,x:0.25},{time:0.6,x:0},{time:0.75,x:0.15},{time:1.0,x:0}] }
+    ]},
+    shake: { duration: 1.5, bones: [
+        { name: 'head', keys: [{time:0,y:0},{time:0.2,y:0.2},{time:0.4,y:-0.2},{time:0.6,y:0.15},{time:0.8,y:-0.15},{time:1.0,y:0.08},{time:1.2,y:-0.08},{time:1.5,y:0}] }
+    ]},
+    bow: { duration: 2.5, bones: [
+        { name: 'spine', keys: [{time:0,x:0},{time:0.8,x:0.4},{time:1.5,x:0.4},{time:2.5,x:0}] }
+    ]},
+    wave_arm: { duration: 2.0, bones: [
+        { name: 'rightUpperArm', keys: [{time:0,z:0},{time:0.4,z:0.8},{time:0.8,z:0.4},{time:1.2,z:0.8},{time:1.6,z:0.4},{time:2.0,z:0}] }
+    ]},
+    greet: { duration: 2.0, bones: [
+        { name: 'spine', keys: [{time:0,x:0},{time:0.5,x:0.15},{time:1.5,x:0.15},{time:2.0,x:0}] }
+    ]},
+    sit: { duration: 2.0, bones: [
+        { name: 'leftUpperLeg', keys: [{time:0,x:0},{time:1.0,x:-1.2},{time:2.0,x:-1.2}] },
+        { name: 'rightUpperLeg', keys: [{time:0,x:0},{time:1.0,x:-1.2},{time:2.0,x:-1.2}] },
+        { name: 'leftLowerLeg', keys: [{time:0,x:0},{time:1.0,x:1.5},{time:2.0,x:1.5}] },
+        { name: 'rightLowerLeg', keys: [{time:0,x:0},{time:1.0,x:1.5},{time:2.0,x:1.5}] },
+        { name: 'spine', keys: [{time:0,x:0},{time:1.0,x:-0.1},{time:2.0,x:-0.1}] }
+    ]},
+    wave_both: { duration: 2.5, bones: [
+        { name: 'leftUpperArm', keys: [{time:0,z:0},{time:0.3,z:-0.9},{time:0.7,z:-0.4},{time:1.1,z:-0.9},{time:1.5,z:-0.4},{time:1.9,z:-0.9},{time:2.5,z:0}] },
+        { name: 'rightUpperArm', keys: [{time:0,z:0},{time:0.5,z:0.9},{time:0.9,z:0.4},{time:1.3,z:0.9},{time:1.7,z:0.4},{time:2.1,z:0.9},{time:2.5,z:0}] }
+    ]},
+    nod_slow: { duration: 2.0, bones: [
+        { name: 'head', keys: [{time:0,x:0},{time:0.6,x:0.15},{time:1.0,x:0},{time:1.4,x:0.15},{time:2.0,x:0}] }
+    ]},
+    head_tilt: { duration: 2.0, bones: [
+        { name: 'head', keys: [{time:0,x:0,z:0},{time:0.5,x:0.1,z:0.2},{time:1.5,x:0.1,z:0.2},{time:2.0,x:0,z:0}] }
+    ]},
+    shoulder_shrug: { duration: 2.0, bones: [
+        { name: 'leftUpperArm', keys: [{time:0,z:0},{time:0.4,z:-0.3},{time:1.2,z:-0.3},{time:2.0,z:0}] },
+        { name: 'rightUpperArm', keys: [{time:0,z:0},{time:0.4,z:0.3},{time:1.2,z:0.3},{time:2.0,z:0}] },
+        { name: 'spine', keys: [{time:0,x:0},{time:0.4,x:-0.05},{time:1.2,x:-0.05},{time:2.0,x:0}] }
+    ]}
+};
+
+// ========== 桥接初始化 ==========
+function initBridge() {
+    try {
+        if (typeof QWebChannel !== 'undefined') {
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                _bridge = channel.objects.live2dBridge;
+                if (_bridge) {
+                    _bridge.on_model_loaded('fallback');
+                }
+            });
+        }
+    } catch (e) {
+        console.log('QWebChannel not available, running standalone');
+    }
+}
+
+function loadConfig(callback) {
+    callback(_characterConfig);
+}
+
+// ========== 获取 canvas 实际尺寸 ==========
+function getCanvasSize() {
+    var canvas = document.getElementById('model-canvas');
+    var w = canvas.clientWidth || canvas.offsetWidth || window.innerWidth;
+    var h = canvas.clientHeight || canvas.offsetHeight || window.innerHeight;
+    if (w < 10) w = 320;
+    if (h < 10) h = 380;
+    return { width: w, height: h };
+}
+
+// ========== Fallback 模式 ==========
+function initFallback() {
+    var canvas = document.getElementById('model-canvas');
+    if (canvas) canvas.style.display = 'none';
+
+    document.getElementById('fallback-view').style.display = 'flex';
+    document.getElementById('fallback-name').textContent = _characterConfig.name;
+    document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+    document.getElementById('status-bar').textContent = 'Fallback mode';
+
+    document.getElementById('fallback-avatar').addEventListener('click', function() {
+        playRandomMotion();
+        var emojis = _emojis;
+        this.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+        setTimeout(function() {
+            document.getElementById('fallback-avatar').textContent = _characterConfig.avatar;
+        }, 800);
+    });
+    console.log('Fallback initialized for:', _characterConfig.name);
+}
+
+// ========== Live2D 渲染 ==========
+function startLive2D() {
+    var canvas = document.getElementById('model-canvas');
+
+    try {
+        if (typeof PIXI === 'undefined' || !PIXI.live2d || !PIXI.live2d.Live2DModel) {
+            console.log('Live2D SDK not available');
+            return false;
+        }
+
+        document.getElementById('status-bar').textContent = 'Loading Live2D...';
+        var size = getCanvasSize();
+
+        _pixiApp = new PIXI.Application({
+            view: canvas,
+            width: size.width,
+            height: size.height,
+            transparent: true,
+            autoStart: true,
+            resizeTo: canvas
+        });
+
+        var _Live2DModel = (PIXI.live2d && PIXI.live2d.Live2DModel) || window.Live2DModel;
+        if (!_Live2DModel) {
+            document.getElementById('status-bar').textContent = 'Live2DModel not available';
+            console.error('[Live2D] PIXI.live2d.Live2DModel:', typeof PIXI.live2d, typeof PIXI.live2d.Live2DModel);
+            return;
+        }
+        _Live2DModel.from(_characterConfig.modelPath).then(function(model) {
+            _live2dModel = model;
+            _pixiApp.stage.addChild(model);
+            model.scale.set(_modelScale);
+            model.x = _pixiApp.view.width / 2;
+            model.y = _pixiApp.view.height / 2;
+            model.anchor.set(0.5, 0.5);
+
+            model.on('hit', function(hitAreas) {
+                playMotion('tap_body');
+            });
+
+            document.getElementById('fallback-view').style.display = 'none';
+            document.getElementById('status-bar').textContent = 'Live2D Loaded';
+            canvas.style.display = 'block';
+
+            if (_bridge) {
+                _bridge.on_model_loaded(_characterConfig.name);
+            }
+            console.log('Live2D model loaded successfully');
+        }).catch(function(err) {
+            console.error('Live2D load error:', err.message);
+            document.getElementById('status-bar').textContent = 'Live2D failed: ' + err.message;
+            initFallback();
+        });
+
+        return true;
+    } catch (e) {
+        console.error('Live2D init error:', e.message);
+        document.getElementById('status-bar').textContent = 'Live2D SDK error';
+        return false;
+    }
+}
+
+// ========== VRM 渲染 ==========
+function startVRM() {
+    var canvas = document.getElementById('model-canvas');
+
+    try {
+        if (typeof THREE === 'undefined') {
+            console.error('Three.js not loaded');
+            return false;
+        }
+        if (typeof THREE.GLTFLoader === 'undefined') {
+            console.error('GLTFLoader not loaded');
+            return false;
+        }
+
+        document.getElementById('status-bar').textContent = 'Loading VRM...';
+
+        var size = getCanvasSize();
+        var width = size.width;
+        var height = size.height;
+        console.log('VRM canvas size:', width, 'x', height);
+        console.log('Model path:', _characterConfig.modelPath);
+
+        // 场景
+        _threeScene = new THREE.Scene();
+        _threeClock = new THREE.Clock();
+
+        // 相机
+        _threeCamera = new THREE.PerspectiveCamera(30, width / height, 0.1, 1000);
+        _threeCamera.position.set(0, 1.3, 2.5);
+
+        // 渲染器
+        _threeRenderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            alpha: false,
+            antialias: true,
+            preserveDrawingBuffer: true
+        });
+        _threeRenderer.setSize(width, height);
+        _threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        _threeRenderer.setClearColor(0xe0f7fa, 1);  // 初音未来主题色背景
+        _threeRenderer.outputColorSpace = THREE.SRGBColorSpace;
+
+        // 灯光
+        var ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        _threeScene.add(ambientLight);
+
+        var directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(1, 1, 1).normalize();
+        _threeScene.add(directionalLight);
+
+        // 控制器
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            var controls = new THREE.OrbitControls(_threeCamera, canvas);
+            controls.target.set(0, 1.3, 0);
+            controls.update();
+        }
+
+        // 加载 VRM 模型
+        var loader = new THREE.GLTFLoader();
+
+        if (typeof THREE_VRM !== 'undefined' && THREE_VRM.VRMLoaderPlugin) {
+            loader.register(function(parser) {
+                return new THREE_VRM.VRMLoaderPlugin(parser);
+            });
+            console.log('VRM plugin registered');
+        } else {
+            console.warn('THREE_VRM not available, loading as plain GLTF');
+        }
+
+        loader.load(
+            _characterConfig.modelPath,
+            function(gltf) {
+                console.log('GLTF loaded, has VRM:', !!gltf.userData.vrm);
+                var vrm = gltf.userData.vrm;
+
+                if (vrm) {
+                    _threeModel = vrm;
+                    _threeScene.add(vrm.scene);
+                    vrm.scene.rotation.y = Math.PI;
+
+                    // 自动调整相机位置
+                    var box = new THREE.Box3().setFromObject(vrm.scene);
+                    var center = box.getCenter(new THREE.Vector3());
+                    var size = box.getSize(new THREE.Vector3());
+                    var maxDim = Math.max(size.x, size.y, size.z);
+                    var dist = maxDim * 2;
+                    _threeCamera.position.set(center.x, center.y + size.y * 0.3, center.z + dist);
+                    _threeCamera.lookAt(center);
+
+                    document.getElementById('status-bar').textContent = 'VRM Loaded';
+                    console.log('VRM model loaded:', _characterConfig.name);
+                } else {
+                    _threeModel = { scene: gltf.scene, update: function() {} };
+                    _threeScene.add(gltf.scene);
+
+                    document.getElementById('status-bar').textContent = 'GLTF Loaded';
+                    console.log('GLTF model loaded');
+                }
+
+                // 初始化动画控制器
+                if (typeof AnimationController !== 'undefined' && _threeModel && _threeModel.humanoid) {
+                    _animCtrl = new AnimationController(_threeScene, _threeModel);
+                    _animCtrl.init();
+                    console.log('AnimationController initialized');
+                }
+
+                document.getElementById('fallback-view').style.display = 'none';
+                canvas.style.display = 'block';
+
+                if (_bridge) {
+                    _bridge.on_model_loaded(_characterConfig.name);
+                }
+
+                animate();
+            },
+            function(progress) {
+                if (progress.total > 0) {
+                    var percent = Math.round((progress.loaded / progress.total) * 100);
+                    document.getElementById('status-bar').textContent = 'Loading: ' + percent + '%';
+                }
+            },
+            function(error) {
+                console.error('VRM load error:', error.message || error);
+                document.getElementById('status-bar').textContent = 'VRM load failed';
+                initFallback();
+            }
+        );
+
+        animate();
+
+        return true;
+    } catch (e) {
+        console.error('VRM init error:', e.message);
+        document.getElementById('status-bar').textContent = 'VRM init error';
+        return false;
+    }
+}
+
+function animate() {
+    _threeAnimationId = requestAnimationFrame(animate);
+
+    if (_threeClock) {
+        var deltaTime = _threeClock.getDelta();
+        if (_animCtrl) { _animCtrl.update(deltaTime); } else if (_threeMixer) { _threeMixer.update(deltaTime); }
+        if (_threeModel && _threeModel.update) {
+            _threeModel.update(deltaTime);
+        }
+    }
+
+    if (_threeRenderer && _threeScene && _threeCamera) {
+        _threeRenderer.render(_threeScene, _threeCamera);
+    }
+}
+
+// ========== VRM 骨骼动画播放器 ==========
+function playSkeletalAnimation(vrm, bones, duration) {
+    if (!vrm || !vrm.scene) return;
+    if (!_threeMixer) {
+        _threeMixer = new THREE.AnimationMixer(vrm.scene);
+    }
+    _threeMixer.stopAllAction();
+
+    var tracks = [];
+    bones.forEach(function(boneConfig) {
+        var boneNode = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode(boneConfig.name) : null;
+        if (!boneNode) return;
+        var times = [], values = [];
+        boneConfig.keys.forEach(function(key) {
+            times.push(key.time);
+            var euler = new THREE.Euler(key.x || 0, key.y || 0, key.z || 0, 'XYZ');
+            var quat = new THREE.Quaternion().setFromEuler(euler);
+            values.push(quat.x, quat.y, quat.z, quat.w);
+        });
+        tracks.push(new THREE.QuaternionKeyframeTrack(boneNode.name + '.quaternion', times, values));
+    });
+    if (tracks.length === 0) return;
+
+    var clip = new THREE.AnimationClip('proc_' + Date.now(), duration, tracks);
+    var action = _threeMixer.clipAction(clip);
+    action.setLoop(THREE.LoopOnce);
+    action.clampWhenFinished = true;
+    action.play();
+
+    setTimeout(function() {
+        action.stop();
+        bones.forEach(function(bc) {
+            var bn = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode(bc.name) : null;
+            if (bn) bn.quaternion.identity();
+        });
+    }, duration * 1000 + 50);
+}
+
+// ========== Live2D Motion 播放（带映射） ==========
+function playLive2DMotion(model, name) {
+    if (!model) return;
+    var isExpressionOnly = false;
+    try {
+        var mm = model.internalModel && model.internalModel.motionManager;
+        if (!mm || !mm.definitions || Object.keys(mm.definitions).length === 0) isExpressionOnly = true;
+    } catch(e) { isExpressionOnly = true; }
+
+    if (isExpressionOnly) {
+        var exprMap = getEffectiveExpressionMap();
+        var expr = exprMap[name] || 'happy';
+        try {
+            model.expression(expr);
+            setTimeout(function() { try { model.expression(''); } catch(e) {} }, 2500);
+        } catch(e) {}
+        return;
+    }
+
+    var mapping = getEffectiveLive2DMotionMap()[name];
+    if (!mapping) { tryLive2DExpressionFallback(model, name); return; }
+    try { model.motion(mapping.group, mapping.index); }
+    catch(e) { tryLive2DExpressionFallback(model, name); }
+}
+
+function tryLive2DExpressionFallback(model, name) {
+    var fallbackNames = {'happy':'happy','joy':'happy','sad':'sad','upset':'sad','surprised':'surprised','scared':'surprised','angry':'angry','sleepy':'relaxed','sit_quietly':'relaxed','think':'neutral'};
+    var semanticName = fallbackNames[name] || name;
+    var exprMap = getEffectiveExpressionMap();
+    var expr = exprMap[semanticName] || exprMap[name];
+    if (!expr) return;
+    try { model.expression(expr); setTimeout(function() { try { model.expression(''); } catch(e) {} }, 2000); } catch(e) {}
+}
+
+// ========== 公共接口 ==========
+function playMotion(name, group) {
+    _currentMotion = name;
+    console.log('Motion:', name, group || '');
+    fallbackReaction(name);
+
+    // VRM 骨骼动画 + 表情
+    if (_threeModel && _threeModel.humanoid) {
+        // 优先使用外部动画文件
+        if (_animCtrl && _animCtrl.clipCache.has(name)) {
+            _animCtrl.play(name);
+            console.log('VRM external anim:', name);
+        } else {
+            var mapping = MOTION_MAP[name] || MOTION_MAP['happy'];
+            if (mapping.type === 'skeletal' && SKELETAL_ANIMATIONS[mapping.anim]) {
+                var anim = SKELETAL_ANIMATIONS[mapping.anim];
+                playSkeletalAnimation(_threeModel, anim.bones, anim.duration);
+            }
+            if (mapping.type === 'expression' && _threeModel.expressionManager) {
+                try {
+                    _threeModel.expressionManager.setValue(mapping.name, 1.0);
+                    setTimeout(function() { _threeModel.expressionManager.setValue(mapping.name, 0); }, 2000);
+                } catch(e) {}
+            }
+        }
+    }
+
+    // Live2D motion（带映射）
+    if (_live2dModel) {
+        playLive2DMotion(_live2dModel, name);
+    }
+
+    if (_bridge) {
+        _bridge.on_motion_started(group || 'default', name);
+        setTimeout(function() { _bridge.on_motion_finished(group || 'default', name); }, 2000);
+    }
+}
+
+function setExpression(name) {
+    console.log('Expression:', name);
+
+    if (_threeModel && _threeModel.expressionManager) {
+        _threeModel.expressionManager.setValue(name, 1.0);
+        setTimeout(function() {
+            _threeModel.expressionManager.setValue(name, 0);
+        }, 1500);
+    }
+
+    var avatar = document.getElementById('fallback-avatar');
+    if (avatar) {
+        if (name === 'happy') {
+            avatar.textContent = '😊';
+        } else if (name === 'surprised') {
+            avatar.textContent = '😲';
+        } else if (name === 'sad') {
+            avatar.textContent = '😢';
+        }
+        setTimeout(function() {
+            avatar.textContent = _characterConfig.avatar;
+        }, 1500);
+    }
+}
+
+function fallbackReaction(motion) {
+    var avatar = document.getElementById('fallback-avatar');
+    if (!avatar) return;
+
+    if (motion === 'happy' || motion === 'joy') {
+        avatar.textContent = '😊';
+    } else if (motion === 'surprised') {
+        avatar.textContent = '😲';
+    } else if (motion === 'sad' || motion === 'upset') {
+        avatar.textContent = '😢';
+    } else {
+        var emojis = _emojis;
+        avatar.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    }
+    setTimeout(function() {
+        avatar.textContent = _characterConfig.avatar;
+    }, 1500);
+}
+
+function playRandomMotion() {
+    var names = ['idle', 'happy', 'surprised', 'greeting', 'thinking'];
+    var name = names[Math.floor(Math.random() * names.length)];
+    playMotion(name);
+}
+
+function setMouseFollow(x, y) {
+    if (_threeModel && _threeModel.lookAt) {
+        var targetX = (x / window.innerWidth - 0.5) * 2;
+        var targetY = (y / window.innerHeight - 0.5) * 2;
+        _threeModel.lookAt.target.position.set(targetX * 0.5, targetY * 0.5 + 1.3, 2);
+    }
+}
+
+function setModelScale(scale) {
+    _modelScale = scale;
+
+    if (_threeModel && _threeModel.scene) {
+        _threeModel.scene.scale.set(scale, scale, scale);
+    }
+
+    if (_live2dModel) {
+        _live2dModel.scale.set(scale);
+    }
+
+    var avatar = document.getElementById('fallback-avatar');
+    if (avatar) {
+        avatar.style.transform = 'scale(' + scale + ')';
+    }
+}
+
+function startIdleTimer(intervalMs) {
+    stopIdleTimer();
+    _idleMs = intervalMs || 5000;
+    _idleInterval = setInterval(playRandomMotion, _idleMs);
+}
+
+function stopIdleTimer() {
+    if (_idleInterval) {
+        clearInterval(_idleInterval);
+        _idleInterval = null;
+    }
+}
+
+// ========== 窗口大小调整 ==========
+window.addEventListener('resize', function() {
+    var size = getCanvasSize();
+
+    if (_threeCamera && _threeRenderer) {
+        _threeCamera.aspect = size.width / size.height;
+        _threeCamera.updateProjectionMatrix();
+        _threeRenderer.setSize(size.width, size.height);
+    }
+
+    if (_pixiApp) {
+        _pixiApp.renderer.resize(size.width, size.height);
+    }
+});
+
+// ========== 清理旧资源 ==========
+function cleanup() {
+    if (_threeAnimationId) {
+        cancelAnimationFrame(_threeAnimationId);
+        _threeAnimationId = null;
+    }
+    if (_animCtrl) { _animCtrl.dispose(); _animCtrl = null; }
+    if (_threeMixer) { _threeMixer.stopAllAction(); _threeMixer = null; }
+
+    if (_threeScene) {
+        _threeScene.traverse(function(obj) {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (Array.isArray(obj.material)) {
+                    obj.material.forEach(function(m) { m.dispose(); });
+                } else {
+                    obj.material.dispose();
+                }
+            }
+            if (obj.texture) obj.texture.dispose();
+        });
+    }
+
+    if (_threeModel) {
+        if (_threeModel.dispose) _threeModel.dispose();
+        if (_threeModel.scene) {
+            _threeModel.scene.traverse(function(obj) {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) {
+                        obj.material.forEach(function(m) { m.dispose(); });
+                    } else {
+                        obj.material.dispose();
+                    }
+                }
+            });
+        }
+    }
+
+    if (_threeRenderer) {
+        _threeRenderer.dispose();
+        _threeRenderer = null;
+    }
+
+    if (_pixiApp) {
+        _pixiApp.destroy(true);
+        _pixiApp = null;
+    }
+
+    _threeScene = null;
+    _threeCamera = null;
+    _threeModel = null;
+    _live2dModel = null;
+    stopIdleTimer();
+    console.log('Cleanup done');
+}
+
+// ========== 外部配置注入 ==========
+function updateConfig(config) {
+    console.log('updateConfig called:', JSON.stringify(config));
+    document.getElementById('static-indicator').style.display = 'none';
+    cleanup();
+    _characterConfig = config;
+    document.title = _characterConfig.name;
+
+    initBridge();
+
+    var started = false;
+    if (_characterConfig.styleType === 'vrm') {
+        console.log('Starting VRM mode...');
+        started = startVRM();
+    } else {
+        console.log('Starting Live2D mode...');
+        started = startLive2D();
+    }
+
+    if (!started) {
+        console.log('Model loading failed, using fallback');
+        initFallback();
+    }
+}
+
+// ========== 主入口 ==========
+function main() {
+    loadConfig(function(config) {
+        _characterConfig = config;
+        document.title = _characterConfig.name;
+        initBridge();
+
+        var started = false;
+
+        if (_characterConfig.styleType === 'vrm') {
+            console.log('Starting VRM mode...');
+            started = startVRM();
+        } else {
+            console.log('Starting Live2D mode...');
+            started = startLive2D();
+        }
+
+        if (!started) {
+            console.log('Model loading failed, using fallback');
+            initFallback();
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('static-indicator').textContent = 'DOM ready, waiting for CDN scripts...';
+});
+
+window.onload = function() {
+    console.log('window.onload fired');
+    document.getElementById('static-indicator').textContent = 'All scripts loaded, waiting for config...';
+    window._configInjected = false;
+    setTimeout(function() {
+        if (!window._configInjected) {
+            console.log('No config injected after 2s, using default');
+            main();
+        }
+    }, 2000);
+};
+</script>
+</body>
+</html>

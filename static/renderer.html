@@ -57,11 +57,11 @@ html, body {
 <div id="status-bar">Loading SDK...</div>
 <div id="debug-panel"></div>
 
-<!-- Live2D SDK (本地) -->
-<script src="sdk/pixi.min.js"></script>
-<script src="sdk/cubism4.min.js"></script>
-<script src="sdk/pixi-live2d-display.min.js"></script>
+<!-- Live2D SDK (本地) — 加载顺序必须正确 -->
 <script src="sdk/live2dcubismcore.min.js"></script>
+<script src="sdk/cubism4.min.js"></script>
+<script src="sdk/pixi.min.js"></script>
+<script src="sdk/pixi-live2d-display.min.js"></script>
 
 <!-- Three.js + VRM SDK (本地) -->
 <script src="sdk/three.min.js"></script>
@@ -71,6 +71,9 @@ html, body {
 
 <!-- WebChannel 通信桥 -->
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+<!-- 动画控制器 -->
+<script src="js/animation_controller.js"></script>
 
 <!-- 统一渲染器 -->
 <script src="js/unified_renderer.js"></script>

@@ -151,8 +151,8 @@ def main():
     window.set_character_manager(character_manager)
     print("Character manager set", flush=True)
 
-    # 注册回调：API 切换角色时刷新 GUI（通过信号跨线程调用）
-    api_server._on_character_switched = window.character_switch_requested.emit
+    # 注册回调：API 切换角色时刷新 GUI
+    api_server._on_character_switched = window.update_pet_display
 
     print("桌面宠物系统启动完成", flush=True)
     print(f"可用角色: {character_manager.get_available_characters()}")

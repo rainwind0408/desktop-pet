@@ -54,11 +54,16 @@
 │   └── server.py              # Flask API 服务（22 个端点）
 │
 ├── gui/                       # PyQt5 桌面窗口模块
-│   ├── __init__.py            # 导出: PetWindow, ModelWidget, ModelManager, Live2DBridge
+│   ├── __init__.py            # 导出: PetWindow, ModelWidget, ModelManager, Live2DBridge, BaseRenderer, WebEngineRenderer, SpriteRenderer
 │   ├── pet_window.py          # 主窗口 + 对话框 + 设置框
-│   ├── model_widget.py        # 3D 模型渲染组件（Live2D/VRM）
+│   ├── model_widget.py        # 模型渲染路由层（按 styleType 自动选择 Renderer）
 │   ├── model_manager.py       # 统一模型管理器（引擎预加载、缓存）
-│   └── live2d_bridge.py       # Python-JS 双向通信桥接
+│   ├── live2d_bridge.py       # Python-JS 双向通信桥接
+│   └── renderers/             # 独立渲染器模块
+│       ├── __init__.py        # 导出: BaseRenderer, WebEngineRenderer, SpriteRenderer
+│       ├── base_renderer.py   # 渲染器抽象基类（统一接口定义）
+│       ├── web_engine_renderer.py # WebEngine 渲染器（Live2D + VRM）
+│       └── sprite_renderer.py # Spritesheet 2D 渲染器（QLabel + QPixmap）
 │
 ├── static/                    # 静态资源目录
 │   ├── renderer.html          # 统一渲染页面（双引擎）
@@ -224,11 +229,22 @@ OpenAI, DeepSeek, Qwen, Zhipu, Moonshot, Anthropic, Baidu, MiniMax, StepFun, Dou
 - 左键拖拽，右键菜单（对话/设置/退出）
 - 系统托盘支持
 
-**模型渲染** (`ModelWidget`):
-- QWebEngineView 嵌入 HTML
-- 支持 Live2D 和 VRM 两种格式
-- 页面加载后通过 `runJavaScript` 注入角色配置（`updateConfig()`）
+**模型渲染路由层** (`ModelWidget`):
+- 根据 `profile.json` 的 `styleType` 自动选择渲染器
+- 同类型角色切换时复用 Renderer，跨类型切换时销毁旧的创建新的
+- 拖拽逻辑保留在路由层
 - 降级: 无模型时显示占位标签
+
+**渲染器** (`gui/renderers/`):
+- `BaseRenderer` — 抽象基类，定义 9 个公共方法 + 3 个信号
+- `WebEngineRenderer` — Live2D + VRM 共用，管理 QWebEngineView + ModelManager + Live2DBridge
+- `SpriteRenderer` — Spritesheet 2D 渲染，使用 QLabel + QPixmap，自带帧缓存池（LRU 200 帧）
+
+**渲染器自动匹配**:
+```
+styleType == "live2d" | "vrm"  →  WebEngineRenderer
+styleType == "sprite"          →  SpriteRenderer
+```
 
 **Python-JS 桥接** (`Live2DBridge`):
 - QWebChannel 双向通信

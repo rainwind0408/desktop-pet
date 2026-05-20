@@ -7,6 +7,7 @@ from .pet_window import PetWindow
 from .model_widget import ModelWidget
 from .model_manager import ModelManager, ModelType
 from .live2d_bridge import Live2DBridge
+from .renderers import BaseRenderer, WebEngineRenderer, SpriteRenderer
 
 # 向后兼容
 Live2DWidget = ModelWidget
@@ -17,5 +18,8 @@ __all__ = [
     'ModelManager',
     'ModelType',
     'Live2DWidget',
-    'Live2DBridge'
+    'Live2DBridge',
+    'BaseRenderer',
+    'WebEngineRenderer',
+    'SpriteRenderer',
 ]
