@@ -1,3 +1,294 @@
 {
-  "records": []
+  "records": [
+    {
+      "timestamp": "2026-05-20T05:55:57.790036+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 1 成功, 1 跳过, 0 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "custom": "自定义提供商"
+        },
+        "failed": {}
+      }
+    },
+    {
+      "timestamp": "2026-05-20T05:55:57.734164+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 5 成功, 2 跳过, 3 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [
+              "gpt-4.1-nano",
+              "gpt-4o",
+              "gpt-5.5-pro",
+              "o4-mini"
+            ],
+            "removed": []
+          },
+          "deepseek": {
+            "added": [
+              "deepseek-chat-v2",
+              "deepseek-v4-flash",
+              "deepseek-v4-pro"
+            ],
+            "removed": []
+          },
+          "moonshot": {
+            "added": [
+              "kimi-k2-instruct",
+              "kimi-k2.5",
+              "kimi-k2.6"
+            ],
+            "removed": []
+          },
+          "anthropic": {
+            "added": [
+              "claude-haiku-3-5-20250514",
+              "claude-opus-4-20250514",
+              "claude-sonnet-4-20250514"
+            ],
+            "removed": []
+          },
+          "ollama": {
+            "added": [
+              "llama3",
+              "mistral",
+              "qwen2.5"
+            ],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "baidu": "千帆 API 不提供标准 /v1/models 端点",
+          "custom": "自定义提供商"
+        },
+        "failed": {
+          "qwen": "API 调用失败",
+          "stepfun": "API 调用失败",
+          "doubao": "API 调用失败"
+        }
+      }
+    },
+    {
+      "timestamp": "2026-05-20T05:45:20.515309+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 1 成功, 1 跳过, 0 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "custom": "自定义提供商"
+        },
+        "failed": {}
+      }
+    },
+    {
+      "timestamp": "2026-05-20T05:45:20.431924+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 5 成功, 2 跳过, 3 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [
+              "gpt-4.1-nano",
+              "gpt-4o",
+              "gpt-5.5-pro",
+              "o4-mini"
+            ],
+            "removed": []
+          },
+          "deepseek": {
+            "added": [
+              "deepseek-chat-v2",
+              "deepseek-v4-flash",
+              "deepseek-v4-pro"
+            ],
+            "removed": []
+          },
+          "moonshot": {
+            "added": [
+              "kimi-k2-instruct",
+              "kimi-k2.5",
+              "kimi-k2.6"
+            ],
+            "removed": []
+          },
+          "anthropic": {
+            "added": [
+              "claude-haiku-3-5-20250514",
+              "claude-opus-4-20250514",
+              "claude-sonnet-4-20250514"
+            ],
+            "removed": []
+          },
+          "ollama": {
+            "added": [
+              "llama3",
+              "mistral",
+              "qwen2.5"
+            ],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "baidu": "千帆 API 不提供标准 /v1/models 端点",
+          "custom": "自定义提供商"
+        },
+        "failed": {
+          "qwen": "API 调用失败",
+          "stepfun": "API 调用失败",
+          "doubao": "API 调用失败"
+        }
+      }
+    },
+    {
+      "timestamp": "2026-05-20T03:41:05.425705+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 1 成功, 1 跳过, 0 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "custom": "自定义提供商"
+        },
+        "failed": {}
+      }
+    },
+    {
+      "timestamp": "2026-05-20T03:41:05.355086+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 4 成功, 3 跳过, 3 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [
+              "gpt-4.1-nano",
+              "gpt-4o",
+              "gpt-5.5-pro",
+              "o4-mini"
+            ],
+            "removed": []
+          },
+          "deepseek": {
+            "added": [
+              "deepseek-chat-v2",
+              "deepseek-v4-flash",
+              "deepseek-v4-pro"
+            ],
+            "removed": []
+          },
+          "moonshot": {
+            "added": [
+              "kimi-k2-instruct",
+              "kimi-k2.5",
+              "kimi-k2.6"
+            ],
+            "removed": []
+          },
+          "anthropic": {
+            "added": [
+              "claude-haiku-3-5-20250514",
+              "claude-opus-4-20250514",
+              "claude-sonnet-4-20250514"
+            ],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "baidu": "千帆 API 不提供标准 /v1/models 端点",
+          "ollama": "未配置 API Key",
+          "custom": "自定义提供商"
+        },
+        "failed": {
+          "qwen": "API 调用失败",
+          "stepfun": "API 调用失败",
+          "doubao": "API 调用失败"
+        }
+      }
+    },
+    {
+      "timestamp": "2026-05-20T03:38:34.533077+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 1 成功, 1 跳过, 0 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "custom": "自定义提供商"
+        },
+        "failed": {}
+      }
+    },
+    {
+      "timestamp": "2026-05-20T03:38:34.428286+00:00",
+      "type": "auto_update",
+      "summary": "同步完成: 4 成功, 3 跳过, 3 失败",
+      "details": {
+        "success": {
+          "openai": {
+            "added": [
+              "gpt-4.1-nano",
+              "gpt-4o",
+              "gpt-5.5-pro",
+              "o4-mini"
+            ],
+            "removed": []
+          },
+          "deepseek": {
+            "added": [
+              "deepseek-chat-v2",
+              "deepseek-v4-flash",
+              "deepseek-v4-pro"
+            ],
+            "removed": []
+          },
+          "moonshot": {
+            "added": [
+              "kimi-k2-instruct",
+              "kimi-k2.5",
+              "kimi-k2.6"
+            ],
+            "removed": []
+          },
+          "anthropic": {
+            "added": [
+              "claude-haiku-3-5-20250514",
+              "claude-opus-4-20250514",
+              "claude-sonnet-4-20250514"
+            ],
+            "removed": []
+          }
+        },
+        "skipped": {
+          "baidu": "千帆 API 不提供标准 /v1/models 端点",
+          "ollama": "未配置 API Key",
+          "custom": "自定义提供商"
+        },
+        "failed": {
+          "qwen": "API 调用失败",
+          "stepfun": "API 调用失败",
+          "doubao": "API 调用失败"
+        }
+      }
+    }
+  ]
 }

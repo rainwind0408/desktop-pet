@@ -21,6 +21,11 @@ UNSUPPORTED_PROVIDERS = {
     "baidu": "千帆 API 不提供标准 /v1/models 端点",
 }
 
+# 不需要 API Key 即可拉取模型列表的提供商（本地接口等）
+NO_API_KEY_PROVIDERS = {
+    "ollama",  # 本地接口，/api/tags 无需认证
+}
+
 # 日志最大保留条数
 MAX_LOG_RECORDS = 50
 
@@ -260,8 +265,8 @@ def sync_all_providers(provider_presets: Dict, provider_configs: Dict) -> bool:
         user_config = provider_configs.get(key, {})
         api_key = user_config.get("api_key", "")
 
-        # 无 API Key 且不在 UNSUPPORTED_PROVIDERS 中的厂商，跳过
-        if not api_key and key not in UNSUPPORTED_PROVIDERS:
+        # 无 API Key 且不在 UNSUPPORTED_PROVIDERS 且不需要 Key 的厂商，跳过
+        if not api_key and key not in UNSUPPORTED_PROVIDERS and key not in NO_API_KEY_PROVIDERS:
             print(f"  ⏭️ {key} ({preset.get('name', key)}): 未配置 API Key，跳过")
             results["skipped"][key] = "未配置 API Key"
             continue

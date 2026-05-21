@@ -53,5 +53,11 @@ characters/*/assets/model/
 # Old files
 gui/live2d_widget.py
 
+# Temporary Word documents
+*.docx
+
+# Backup files
+*.bak
+
 # Test characters
 characters/test_*/

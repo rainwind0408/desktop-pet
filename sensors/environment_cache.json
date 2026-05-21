@@ -9,5 +9,16 @@
     "wind": "轻风",
     "description": "Yenchuang，Overcast，22℃，轻风，湿度73%",
     "source": "wttr.in"
+  },
+  "weather_20260520_11": {
+    "city": "Yenchuang",
+    "condition": "Patchy rain nearby",
+    "temperature": 22,
+    "temp_min": 19,
+    "temp_max": 25,
+    "humidity": 66,
+    "wind": "轻风",
+    "description": "Yenchuang，Patchy rain nearby，22℃，轻风，湿度66%",
+    "source": "wttr.in"
   }
 }
