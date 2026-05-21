@@ -62,8 +62,10 @@ html, body {
 <script src="sdk/live2dcubismcore.min.js"></script>
 <!-- 2: PixiJS (核心渲染引擎) -->
 <script src="sdk/pixi.min.js"></script>
-<!-- 3: cubism4 (Cubism 4 专用，无 Cubism 2 依赖) -->
+<!-- 3: cubism4 (Cubism 4 后端绑定) -->
 <script src="sdk/cubism4.min.js"></script>
+<!-- 4: pixi-live2d-display (提供 PIXI.live2d.Live2DModel) -->
+<script src="sdk/pixi-live2d-display.min.js"></script>
 
 <!-- Three.js + VRM SDK (本地) -->
 <script src="sdk/three.min.js"></script>
@@ -95,13 +97,21 @@ function initBridge() {
 
 // 检查 SDK 加载状态
 function checkSDK() {
+    // WebGL 检测
+    var webglAvailable = false;
+    try {
+        var testCanvas = document.createElement('canvas');
+        webglAvailable = !!(testCanvas.getContext('webgl') || testCanvas.getContext('experimental-webgl'));
+    } catch(e) {}
+
     const status = {
         THREE: typeof THREE !== 'undefined',
         THREE_VRM: typeof THREE_VRM !== 'undefined',
         GLTFLoader: typeof THREE !== 'undefined' && typeof THREE.GLTFLoader !== 'undefined',
         OrbitControls: typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined',
         PIXI: typeof PIXI !== 'undefined',
-        Live2DModel: typeof PIXI !== 'undefined' && typeof PIXI.live2d !== 'undefined' && typeof PIXI.live2d.Live2DModel !== 'undefined'
+        Live2DModel: typeof PIXI !== 'undefined' && typeof PIXI.live2d !== 'undefined' && typeof PIXI.live2d.Live2DModel !== 'undefined',
+        WebGL: webglAvailable
     };
 
     console.log('[Renderer] SDK status:', status);

@@ -264,6 +264,21 @@ class UnifiedRenderer {
             return;
         }
 
+        // WebGL 可用性检测
+        try {
+            const testCanvas = document.createElement('canvas');
+            const gl = testCanvas.getContext('webgl') || testCanvas.getContext('experimental-webgl');
+            if (!gl) {
+                throw new Error('WebGL not available - Live2D requires WebGL');
+            }
+            console.log('[Renderer] WebGL available, vendor:', gl.getParameter(gl.VENDOR));
+            const ext = gl.getExtension('WEBGL_lose_context');
+            if (ext) ext.loseContext();
+        } catch (e) {
+            console.warn('[Renderer] WebGL check failed:', e.message);
+            throw new Error('WebGL not available');
+        }
+
         // 检查 SDK 是否可用
         if (typeof PIXI === 'undefined') {
             throw new Error('PIXI not loaded');
@@ -271,6 +286,13 @@ class UnifiedRenderer {
         if (!PIXI.live2d || !PIXI.live2d.Live2DModel) {
             // 尝试等待 SDK 初始化
             console.warn('[Renderer] PIXI.live2d.Live2DModel not ready, waiting...');
+            console.warn('[Renderer] SDK check:', {
+                PIXI: typeof PIXI,
+                live2d: typeof PIXI !== 'undefined' ? typeof PIXI.live2d : 'N/A',
+                live2dKeys: typeof PIXI !== 'undefined' && PIXI.live2d ? Object.keys(PIXI.live2d) : [],
+                Live2DModel: typeof PIXI !== 'undefined' && PIXI.live2d ? typeof PIXI.live2d.Live2DModel : 'N/A',
+                cubismReady: typeof Live2DCubismFramework !== 'undefined'
+            });
             await new Promise((resolve, reject) => {
                 let attempts = 0;
                 const check = setInterval(() => {
@@ -515,9 +537,21 @@ class UnifiedRenderer {
                     // 尝试获取更多网络错误细节
                     if (loadErr.response) {
                         console.error('[Renderer] HTTP status:', loadErr.response.status, loadErr.response.statusText);
+                        if (loadErr.response.status === 404) {
+                            console.error('[Renderer] 404 detected - model file or texture not found at URL:', modelPath);
+                        }
                     }
                     if (loadErr.stack) {
                         console.error('[Renderer] Stack:', loadErr.stack.split('\n').slice(0, 4).join('\n'));
+                    }
+                    // 尝试用 XMLHttpRequest 测试模型 URL 是否可达
+                    try {
+                        var testXhr = new XMLHttpRequest();
+                        testXhr.open('HEAD', modelPath, false);
+                        testXhr.send();
+                        console.error('[Renderer] Model URL test - status:', testXhr.status, testXhr.statusText);
+                    } catch (e2) {
+                        console.error('[Renderer] Model URL unreachable:', e2.message);
                     }
                     // 重新抛出让上层 catch 处理
                     throw loadErr;
